@@ -157,7 +157,8 @@ def main():
             final_output["component_definitions"].append({
                 "component": c.name,
                 "file": os.path.relpath(c.file, target_repo_path),
-                "abstract_forms": c.abstract_forms
+                "abstract_forms": c.abstract_forms,
+                "props":c.props
             })
     print("Processing references...")
     

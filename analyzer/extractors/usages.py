@@ -40,6 +40,49 @@ def findImportSource(extracted_imports_dict: Dict[str, List[str]], target_text: 
         print(f"Error finding import source: {e}")
         return "Declaration"
 
+def extract_component_props(node: Node, source: bytes) -> List[str]:
+    """Extract prop names from a component definition (function/arrow parameters)."""
+    params_node = node.child_by_field_name("parameters")
+    if not params_node:
+        return []
+    
+    # Props is usually the first parameter (ignore symbols)
+    actual_params = [c for c in params_node.children if c.type not in ("(", ")", ",", "type_annotation")]
+    if not actual_params:
+        return []
+        
+    first_param = actual_params[0]
+
+    def extract_from_pattern(p_node: Node) -> List[str]:
+        found = []
+        if p_node.type in ("identifier", "shorthand_property_identifier_pattern"):
+            found.append(source[p_node.start_byte:p_node.end_byte].decode('utf-8'))
+        elif p_node.type == "object_pattern":
+            for child in p_node.children:
+                if child.type == "shorthand_property_identifier_pattern":
+                    found.append(source[child.start_byte:child.end_byte].decode('utf-8'))
+                elif child.type == "pair_pattern":
+                    # key is usually the first child or have 'key' field
+                    key = child.child_by_field_name("key")
+                    if not key and child.children: key = child.children[0]
+                    if key: found.append(source[key.start_byte:key.end_byte].decode('utf-8'))
+                elif child.type == "object_assignment_pattern":
+                    # first child is the pattern
+                    if child.children: found.extend(extract_from_pattern(child.children[0]))
+                elif child.type == "rest_pattern":
+                    for c in child.children:
+                        if c.type == "identifier":
+                            found.append(source[c.start_byte:c.end_byte].decode('utf-8'))
+        elif p_node.type in ("required_parameter", "optional_parameter", "parameter"):
+            # Recurse into children to find pattern
+            for child in p_node.children:
+                if child.type in ("identifier", "object_pattern", "shorthand_property_identifier_pattern", "pair_pattern", "object_assignment_pattern", "rest_pattern"):
+                    found.extend(extract_from_pattern(child))
+                    break # Usually only one pattern per parameter
+        return found
+
+    return extract_from_pattern(first_param)
+
 def extract_usages(file_path: str, source_code: bytes) -> Tuple[List[CallUsage], List[JSXUsage], List[ComponentDefinition], List[TypeDefinition], List[ConstantDefinition], List[ReferenceUsage]]:
     """Extract all call, JSX, and structural usages from a file."""
     parser = get_parser(file_path)
@@ -146,6 +189,7 @@ def extract_usages(file_path: str, source_code: bytes) -> Tuple[List[CallUsage],
                         name=name,
                         code=code,
                         file=file_path,
+                        props=extract_component_props(node, source),
                         line=node.start_point[0] + 1,
                         source_import=findImportSource(extracted_imports_dict, name),
                         context=context[:],

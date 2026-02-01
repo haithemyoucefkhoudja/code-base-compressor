@@ -48,6 +48,7 @@ class ComponentDefinition:
     code: str
     file: str
     line: int
+    props: List[str]
     source_import: str
     extension: str
     context: List[str] = field(default_factory=list)

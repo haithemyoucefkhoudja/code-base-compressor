@@ -4,11 +4,12 @@ Visual RAG Agent - Orchestrator with Recurrent Explore/Exploit Loop
 Principal Architect that uses visual codebase analysis with recursive sub-task exploration.
 """
 
+from google.genai.types import Part
 import workflow
 import os
 import json
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 import time
 from datetime import datetime
@@ -30,54 +31,35 @@ PIL.Image.MAX_IMAGE_PIXELS = None
 ATLAS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles.png"
 LEGEND_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles_legend.png"
 
-# --- Orchestrator System Prompt (Explore/Exploit Loop) ---
+
+# --- Orchestrator System Prompt (Optimized) ---
 ORCHESTRATOR_PROMPT = """
 ### SYSTEM ROLE: The Codebase Architect (Visual-Structural Logic)
 
-You are the Principal Architect of a software repository. You analyze the **Visual DNA** of the existing codebase to create precise implementation plans.
+You are the Principal Architect. You analyze the **Visual DNA** of the codebase to create precise implementation plans.
 
-### THE VISUAL DATA MODEL
-1. **The Atlas:** A map of the entire repository - each colored block represents a file/component.
-2. **The Legend:** A menu linking Component Names -> Visual Glyphs.
-3. **The Tiles:** Color = Library, Texture = Syntax Type, Shape = Complexity.
+### INPUT DATA
+1. **The Atlas (Image):** A map of the entire repository.
+2. **The Legend (Image):** Links Component Names -> Visual Glyphs.
+3. **The Vocabulary (JSON):** The comprehensive list of all available component families.
 
-### EXPLORE vs EXPLOIT DECISION LOOP
+### EXECUTION PROTOCOL
+You have **Thinking** capabilities. Use them to correlate the Visual Atlas with the Vocabulary List in memory. 
+DO NOT search for components; you already have the list. 
 
-You operate in a **recurrent loop**. Each turn, you must decide:
+**PHASE 1: VISUAL REASONING (THINKING)**
+- Scan the Atlas image. Look for clusters of similar colors (libraries) or textures (syntax).
+- Cross-reference with the Legend and the Vocabulary List.
+- Identify which families need closer inspection to understand the user's request.
 
-**EXPLORE** (Need more information)
-- Call `inspect_deeper(families)` to examine specific components
-- The returned image shows the internal structure of those families
-- Use this when you see interesting patterns you want to understand better
-- Each task may reveal sub-families worth exploring
-
-**EXPLOIT** (Ready to finalize)
-- Call `finalize_plan(markdown_content)` when you have enough information
-- Output a comprehensive implementation plan in MARKDOWN format
-- Include all discovered patterns and their relationships
-
-### TOOLS AVAILABLE
-
-| Tool | When to Use |
-|------|-------------|
-| `bulk_search(concepts: list)` | Find families matching concepts in vocabulary |
-| `inspect_deeper(families: list)` | EXPLORE: Drill into families, discover sub-components |
-| `finalize_plan(markdown: str)` | EXPLOIT: Save final implementation plan and exit loop |
-
-### EXECUTION FLOW
-
-1. **Initial Search**: Scan vocabulary for relevant patterns
-2. **First Inspection**: Inspect top candidates visually
-3. **Decision Loop**:
-   - If inspection reveals important sub-families → EXPLORE: inspect those too
-   - If you have enough structural understanding → EXPLOIT: finalize the plan
-4. **Repeat** until you call `finalize_plan`
+**PHASE 2: ACTION (TOOL CALLING)**
+- **INSPECT**: Call `inspect_deeper(families)` on specific items from the Vocabulary list to see their internal structure.
+- **FINALIZE**: Call `finalize_plan(markdown)` once you have a strategy.
 
 ### CRITICAL CONSTRAINTS
-- ONLY use family names from the VOCABULARY LIST
-- BATCH tool calls when possible
-- Maximum depth: 3 exploration levels
-- Always end with `finalize_plan`
+- **REDUCE ROUNDTRIPS:** Inspect ALL relevant families in a single function call.
+- **NO SEARCHING:** Pick names strictly from the provided VOCABULARY LIST.
+- **MAX DEPTH:** You have 3 turns. Turn 1: Inspect. Turn 2: Verify (if needed). Turn 3: Finalize.
 
 ### FINALIZE_PLAN OUTPUT FORMAT (MARKDOWN)
 
@@ -85,16 +67,15 @@ You operate in a **recurrent loop**. Each turn, you must decide:
 # Implementation Plan: [Feature Name]
 
 ## Summary
-[High-level architectural approach]
+[High-level approach]
 
 ## Required Dependencies
 - [library1]
-- [library2]
 
 ## Discovered Patterns
-| Pattern | Location | Usage |
-|---------|----------|-------|
-| [name]  | [vocab entry] | [how it's used] |
+| Pattern | Family Name | Usage |
+|---------|-------------|-------|
+| [name]  | [exact vocab name] | [visual reasoning] |
 
 ## Implementation Tasks
 
@@ -102,23 +83,19 @@ You operate in a **recurrent loop**. Each turn, you must decide:
 - **File**: `path/to/file.tsx`
 - **Role**: frontend | backend | logic
 - **Reference**: `[Vocabulary Family Name]`
-- **Visual Reasoning**: [Why this pattern was chosen based on color/density]
-- **Description**: [What to build]
-
-### Task 2: ...
-```
+- **Description**: [Specific implementation details]
+### Task 2: .....
 """
-
 
 class OrchestratorAgent:
     """
     Principal Architect with recurrent Explore/Exploit decision loop.
     """
     
-    MAX_EXPLORATION_DEPTH = 3
+    MAX_EXPLORATION_DEPTH = 20
     
     def __init__(self):
-        self.api_key = "AIzaSyCuge0jQnDpHgrSyDwPaWNBvr5R7bm__CI"
+        self.api_key = "AIzaSyDICBEsgRfPnfx7Rw3yi_9DOq4r7_wwL3Y"
         if not self.api_key:
             raise ValueError("FATAL: API key missing")
         
@@ -204,7 +181,20 @@ class OrchestratorAgent:
             # Check function calls
             if not response.function_calls:
                 if response.text:
-                    logger.info(f"Text response (no tools): {response.text[:200]}")
+                    logger.info("🤖 Model returned text without tool call. Checking for embedded plan...")
+                    # Even if it didn't call the tool, it might have written the plan in markdown
+                    if "# Implementation Plan" in response.text:
+                        self._save_plan(response.text)
+                        finalized = True
+                        break
+                    else:
+                        logger.info(f"Text response (no plan found): {response.text[:200]}")
+                
+                if self.exploration_depth >= self.MAX_EXPLORATION_DEPTH:
+                    break
+                
+                # If no tools and no plan, but not at max depth, maybe prompt to continue?
+                # For now, we'll just break to be safe.
                 break
             
             # Execute tools
@@ -215,14 +205,8 @@ class OrchestratorAgent:
                 
                 logger.info(f"⚡ Executing: {fname}")
                 
-                if fname == "bulk_search":
-                    concepts = args.get("concepts", [])
-                    result = self.vocab_index.bulk_search(concepts)
-                    tool_outputs.append(types.Part.from_function_response(
-                        name=fname, response={"matches": result}
-                    ))
                 
-                elif fname == "inspect_deeper":
+                if fname == "inspect_deeper":
                     families = args.get("families", [])
                     output = self._execute_inspect(families)
                     tool_outputs.append(output)
@@ -252,6 +236,14 @@ class OrchestratorAgent:
                     ]
                 ))
                 self._pending_visuals = None
+            
+            # If we are at the last turn, FORCE finalization
+            if self.exploration_depth == self.MAX_EXPLORATION_DEPTH - 1 and not finalized:
+                logger.info("⚠️ Near max depth. Forcing finalization message.")
+                history.append(types.Content(
+                    role="user",
+                    parts=[types.Part(text="CRITICAL: This is your LAST turn. You MUST call `finalize_plan` NOW with the complete implementation plan. Do not explore further.")]
+                ))
         
         if not finalized:
             logger.warning("⚠️ Max exploration depth reached without finalization")
@@ -259,10 +251,6 @@ class OrchestratorAgent:
             self.composer.compose(os.path.join(self.gen_dir, "exploration_trace.png"))
 
     def _create_tools(self):
-        """Define tools for function calling."""
-        def bulk_search(concepts: list[str]) -> dict:
-            """Search multiple concepts in vocabulary."""
-            return self.vocab_index.bulk_search(concepts)
         
         def inspect_deeper(families: list[str]) -> dict:
             """EXPLORE: Inspect families to discover sub-patterns."""
@@ -272,10 +260,11 @@ class OrchestratorAgent:
             """EXPLOIT: Save the final implementation plan in markdown."""
             return {"status": "saved"}
         
-        return [bulk_search, inspect_deeper, finalize_plan]
+        return [ inspect_deeper, finalize_plan]
 
     def _execute_inspect(self, families: List[str]):
-        """Execute inspection with multimodal response."""
+        """Execute inspection."""
+        # Filter duplicates
         new_families = [f for f in families if f not in self.explored_families]
         self.explored_families.update(new_families)
         
@@ -294,21 +283,18 @@ class OrchestratorAgent:
                 "family": r.family,
                 "neighbors": r.neighbors[:8],
                 "density": r.density,
-                "top_imports": list(r.color_analysis.keys())[:8]
+                "imports": list(r.color_analysis.keys())[:5]
             }
             for r in results
         ]
         
-        # Just return analysis data - images will be added separately to history
-        # (The $ref multimodal response system is broken in the SDK)
         self._pending_visuals = stitched_bytes if stitched_bytes else None
         
         return types.Part.from_function_response(
             name="inspect_deeper",
             response={
                 "analysis": analysis,
-                "discovered_subfamilies": [n for r in results for n in r.neighbors[:3]],
-                "has_visual": bool(stitched_bytes)
+                "subfamilies_found": [n for r in results for n in r.neighbors[:3]],
             }
         )
 
@@ -348,7 +334,7 @@ class OrchestratorAgent:
         for attempt in range(5):
             try:
                 return self.client.models.generate_content(
-                    model="gemini-3-flash-preview",
+                    model="gemini-2.5-flash",
                     contents=content,
                     config=config
                 )
@@ -431,7 +417,7 @@ class WorkerAgent:
     """
     
     MAX_EXPLORATION_DEPTH = 3
-    
+
     def __init__(self, client, decoder, vocab_index, output_dir: str):
         self.client = client
         self.decoder = decoder
@@ -440,315 +426,155 @@ class WorkerAgent:
         self.code_dir = os.path.join(output_dir, "code")
         os.makedirs(self.code_dir, exist_ok=True)
         
-        # Worker-specific logging
-        log_path = os.path.join(output_dir, "worker.log")
         self.worker_logger = logging.getLogger("worker")
+        log_path = os.path.join(output_dir, "worker.log")
         fh = logging.FileHandler(log_path, encoding='utf-8')
         fh.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
         self.worker_logger.addHandler(fh)
         self.worker_logger.setLevel(logging.INFO)
     
     def execute_task(self, task: Dict) -> TaskResult:
-        """
-        Execute a single task with explore/exploit loop.
-        Returns TaskResult with generated code or error.
-        """
         task_id = task.get("id", f"task_{int(time.time())}")
         filename = task.get("filename", "untitled.tsx")
-        description = task.get("description", "")
         reference = task.get("reference_family", "")
-        role = task.get("role", "frontend")
-        
-        self.worker_logger.info(f"\n{'='*60}")
-        self.worker_logger.info(f"🔧 TASK: {task_id}")
-        self.worker_logger.info(f"   File: {filename}")
-        self.worker_logger.info(f"   Reference: {reference}")
-        self.worker_logger.info(f"   Role: {role}")
         
         logger.info(f"🔧 Worker: {task_id} - {filename}")
         
-        # --- Phase 1: Gather Reference Visual ---
+        # --- Phase 1: Context ---
         ref_bytes, ref_analysis = self._get_reference(reference)
         
-        if not ref_bytes:
-            self.worker_logger.warning(f"   No visual reference found for: {reference}")
-        else:
-            self.worker_logger.info(f"   Reference loaded: {len(ref_bytes)} bytes, density={ref_analysis.get('density')}")
-        
-        # --- Phase 2: Build Prompt ---
-        prompt = self._build_prompt(filename, description, role, ref_analysis, ref_bytes)
-        
-        # --- Phase 3: Explore/Exploit Loop ---
-        generated_code = None
-        explorations = 0
-        history = None
-        explored_families = set()
-        
-        for depth in range(self.MAX_EXPLORATION_DEPTH):
-            self.worker_logger.info(f"   Loop iteration {depth + 1}/{self.MAX_EXPLORATION_DEPTH}")
-            
-            try:
-                response = self._call_api(prompt if history is None else history)
-                
-                if history is None:
-                    history = self._init_history(prompt, response)
-                elif response and response.candidates and response.candidates[0].content:
-                    history.append(response.candidates[0].content)
-                
-                if not response:
-                    self.worker_logger.error("   No API response")
-                    break
-                
-                # Check for function calls
-                if not response.function_calls:
-                    # No tools called - check if model output text (fallback)
-                    if response.text:
-                        # Try to extract code from text response
-                        extracted = self._extract_code_from_text(response.text)
-                        if extracted:
-                            generated_code = extracted
-                            self.worker_logger.info("   Code extracted from text response")
-                    break
-                
-                # Process function calls
-                tool_outputs = []
-                should_break = False
-                
-                for call in response.function_calls:
-                    fname = call.name
-                    args = dict(call.args) if call.args else {}
-                    
-                    self.worker_logger.info(f"   Tool: {fname}")
-                    
-                    if fname == "explore_reference":
-                        # EXPLORE - dig deeper into references
-                        families = args.get("families", [])
-                        families = [f for f in families if f not in explored_families]
-                        explored_families.update(families)
-                        
-                        if families:
-                            explorations += 1
-                            logger.info(f"   📖 Exploring: {families[:3]}...")
-                            
-                            stitched, results = self.decoder.bulk_inspect(families)
-                            analysis = [
-                                {
-                                    "family": r.family,
-                                    "neighbors": r.neighbors[:5],
-                                    "density": r.density,
-                                    "imports": list(r.color_analysis.keys())[:5]
-                                }
-                                for r in results
-                            ]
-                            
-                            tool_outputs.append(types.Part.from_function_response(
-                                name=fname,
-                                response={"analysis": analysis, "count": len(results)}
-                            ))
-                            
-                            # Add visual as user message
-                            if stitched:
-                                history.append(types.Content(
-                                    role="user",
-                                    parts=[
-                                        types.Part(text=f"Visual of explored components: {families}"),
-                                        types.Part.from_bytes(data=stitched, mime_type="image/png")
-                                    ]
-                                ))
-                        else:
-                            tool_outputs.append(types.Part.from_function_response(
-                                name=fname,
-                                response={"error": "No new families to explore"}
-                            ))
-                    
-                    elif fname == "generate_code":
-                        # EXPLOIT - generate final code
-                        code = args.get("code", "")
-                        
-                        if code and len(code) > 10:
-                            generated_code = code
-                            logger.info(f"   ✅ Code generated: {len(code)} chars")
-                            self.worker_logger.info(f"   Code generated: {len(code)} characters")
-                            
-                            tool_outputs.append(types.Part.from_function_response(
-                                name=fname,
-                                response={"status": "accepted", "length": len(code)}
-                            ))
-                            should_break = True
-                        else:
-                            tool_outputs.append(types.Part.from_function_response(
-                                name=fname,
-                                response={"status": "rejected", "error": "Code too short or empty"}
-                            ))
-                
-                if should_break:
-                    break
-                
-                # Add tool outputs to history
-                if tool_outputs:
-                    history.append(types.Content(role="tool", parts=tool_outputs))
-                    
-            except Exception as e:
-                self.worker_logger.error(f"   Error: {e}")
-                logger.error(f"   Worker error: {e}")
-                return TaskResult(
-                    task_id=task_id,
-                    filename=filename,
-                    success=False,
-                    error=str(e),
-                    explorations=explorations
-                )
-        
-        # --- Phase 4: Save Generated Code ---
-        if generated_code:
-            code_path = self._save_code(filename, generated_code)
-            self.worker_logger.info(f"   Saved: {code_path}")
-            
-            return TaskResult(
-                task_id=task_id,
-                filename=filename,
-                success=True,
-                code=generated_code,
-                code_path=code_path,
-                explorations=explorations
-            )
-        
-        self.worker_logger.warning("   No code generated")
-        return TaskResult(
-            task_id=task_id,
-            filename=filename,
-            success=False,
-            error="No code generated after max iterations",
-            explorations=explorations
-        )
-    
-    def _get_reference(self, reference: str) -> tuple:
-        """Get visual reference and analysis for a component."""
-        if not reference:
-            return None, {}
-        
-        # Clean up reference (may have :: or \\ formatting)
-        ref_clean = reference.replace("::", "/").split("/")[-1] if "::" in reference else reference
-        
-        # Try exact match first
-        result = self.decoder.inspect(reference)
-        
-        if not result:
-            # Try searching vocabulary
-            matches = self.vocab_index.search(ref_clean)
-            if matches:
-                result = self.decoder.inspect(matches[0])
-        
-        if result:
-            return result.image_bytes, {
-                "family": result.family,
-                "neighbors": result.neighbors[:10],
-                "density": result.density,
-                "imports": list(result.color_analysis.keys())[:10]
-            }
-        
-        return None, {}
-    
-    def _build_prompt(self, filename: str, description: str, role: str, ref_analysis: dict, ref_bytes: Optional[bytes]) -> list:
-        """Build the worker prompt with all context."""
-        parts = [
-            WORKER_PROMPT,
-            f"\n### TARGET FILE\n**Path:** `{filename}`\n**Role:** {role}\n",
-            f"\n### TASK DESCRIPTION\n{description}\n",
+        prompt:List[Part] = [
+            Part(text=WORKER_PROMPT),
+            Part(text=f"\n### TARGET FILE: {filename}\n### DESCRIPTION: {task.get('description', '')}\n"),
         ]
         
-        if ref_analysis:
-            parts.append(f"\n### REFERENCE ANALYSIS\n```json\n{json.dumps(ref_analysis, indent=2)}\n```\n")
-        
         if ref_bytes:
-            parts.append("\n### REFERENCE VISUAL\nAnalyze this image - it shows the visual DNA of the reference component. Clone its patterns.\n")
-            parts.append(types.Part.from_bytes(data=ref_bytes, mime_type="image/png"))
+            prompt.append(Part(text="\n### REFERENCE VISUAL (CLONE THIS)\n"))
+            prompt.append(types.Part.from_bytes(data=ref_bytes, mime_type="image/png"))
+        if ref_analysis:
+            prompt.append(Part(text=f"\n### REFERENCE DATA\n{json.dumps(ref_analysis)}\n"))
         
-        return parts
-    
-    def _call_api(self, content) -> Any:
-        """Call API with retry logic."""
-        # Define tools directly - these are just schemas since AFC is disabled
-        def explore_reference(families: list[str]) -> dict:
-            """Explore sub-components to understand their structure. Call this when you need to see how referenced components work internally."""
-            return {}
+        # --- Phase 2: Execution ---
+        history = None
+        generated_code = None
         
-        def generate_code(code: str) -> dict:
-            """Generate and save the final implementation code. The 'code' parameter must contain the complete source code for the target file."""
-            return {}
+        for depth in range(self.MAX_EXPLORATION_DEPTH):
+            
+            # API Call
+            try:
+                response = self._call_api(prompt if history is None else history)
+            except Exception as e:
+                return TaskResult(task_id, filename, False, error=str(e))
+            if not response:
+                logger.warning(f"API error, No Response")
+                break    
+            if history is None:
+                history = self._init_history(prompt, response)
+            elif  response.candidates:
+                history.append(response.candidates[0].content)
+            
+            if not response.function_calls:
+                # Check for code block in text
+                if response.text and "```" in response.text:
+                    generated_code = self._extract_code_from_text(response.text)
+                    if generated_code: break
+                
+                # If no tools and no code, and we are deep, break
+                if depth > 1: break
+                continue
+
+            # Handle Tools
+            tool_outputs = []
+            should_break = False
+            
+            for call in response.function_calls:
+                fname = call.name
+                args = dict(call.args) if call.args else {}
+                
+                if fname == "generate_code":
+                    code = args.get("code", "")
+                    if len(code) > 20:
+                        generated_code = code
+                        tool_outputs.append(types.Part.from_function_response(name=fname, response={"status": "saved"}))
+                        should_break = True
+                
+                elif fname == "explore_reference":
+                    families = args.get("families", [])
+                    # Safety check: If agent tries to explore but gives no valid families
+                    if not families:
+                        tool_outputs.append(types.Part.from_function_response(name=fname, response={"error": "No valid families provided. Generate code now."}))
+                    else:
+                        stitched, results = self.decoder.bulk_inspect(families)
+                        logger.info(f"Results: {results}")
+                        if not results:
+                            # CRITICAL FIX: If exploration yields nothing, force code generation next turn
+                            tool_outputs.append(types.Part.from_function_response(name=fname, response={"error": "Families not found in Atlas. Proceed to generate code with best effort."}))
+                        else:
+                            tool_outputs.append(types.Part.from_function_response(name=fname, response={"found": len(results)}))
+                            if stitched:
+                                history.append(types.Content(role="user", parts=[types.Part.from_bytes(data=stitched, mime_type="image/png")]))
+
+            if should_break:
+                break
+                
+            history.append(types.Content(role="tool", parts=tool_outputs))
+
+        if generated_code:
+            path = self._save_code(filename, generated_code)
+            return TaskResult(task_id, filename, True, code=generated_code, code_path=path)
+        
+        return TaskResult(task_id, filename, False, error="No code generated")
+
+    def _get_reference(self, reference: str):
+        if not reference: return None, {}
+        # Try exact match
+        res = self.decoder.inspect(reference)
+        
+        if res:
+            image_bytes, result = res
+            return image_bytes, {"family": result.family, "imports": list(result.color_analysis.keys())[:5], "props":result.props}
+        return None, {}
+
+    def _call_api(self, content):
+        # Worker tools
+        def generate_code(code: str) -> dict: return {}
+        def explore_reference(families: list[str]) -> dict: return {}
         
         config = types.GenerateContentConfig(
-            tools=[explore_reference, generate_code],
+            tools=[generate_code, explore_reference],
             thinking_config=types.ThinkingConfig(include_thoughts=True),
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             temperature=0.2
         )
-        
-        for attempt in range(3):
+        # Reduced retries for speed
+        for attempt in range(2):
             try:
-                return self.client.models.generate_content(
-                    model="gemini-3-flash-preview",
-                    contents=content,
-                    config=config
-                )
+                return self.client.models.generate_content(model="gemini-2.5-flash", contents=content, config=config)
             except Exception as e:
-                if "429" in str(e) or "503" in str(e):
-                    wait = (attempt + 1) * 10
-                    self.worker_logger.warning(f"   Rate limited, waiting {wait}s...")
-                    time.sleep(wait)
-                else:
-                    raise
+                if "429" in str(e): time.sleep(5 + (attempt * 5))
+                else: raise
         return None
-    
+
     def _init_history(self, prompt, response):
-        """Initialize conversation history."""
         parts = []
         for p in prompt:
-            if isinstance(p, str):
-                parts.append(types.Part(text=p))
-            elif isinstance(p, types.Part):
-                parts.append(p)
-        
+            if isinstance(p, str): parts.append(types.Part(text=p))
+            elif isinstance(p, types.Part): parts.append(p)
         history = [types.Content(role="user", parts=parts)]
-        
-        if response and response.candidates and response.candidates[0].content:
-            history.append(response.candidates[0].content)
-        
+        if response and response.candidates: history.append(response.candidates[0].content)
         return history
-    
-    def _extract_code_from_text(self, text: str) -> Optional[str]:
-        """Extract code from markdown text response (fallback)."""
+
+    def _extract_code_from_text(self, text):
         import re
-        
-        # Look for code blocks
-        patterns = [
-            r'```(?:tsx?|jsx?|typescript|javascript)\n(.*?)```',
-            r'```\n(.*?)```',
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.DOTALL)
-            if matches:
-                # Return the longest code block
-                return max(matches, key=len)
-        
-        return None
-    
-    def _save_code(self, filename: str, code: str) -> str:
-        """Save generated code to file."""
-        # Create safe filename
-        safe_name = filename.replace("/", "_").replace("\\", "_").replace(":", "_")
-        
-        # Preserve extension
-        if not any(safe_name.endswith(ext) for ext in ['.tsx', '.ts', '.jsx', '.js', '.py', '.css']):
-            safe_name += '.tsx'
-        
-        code_path = os.path.join(self.code_dir, safe_name)
-        
-        with open(code_path, 'w', encoding='utf-8') as f:
-            f.write(code)
-        
-        return code_path
+        match = re.search(r'```(?:tsx?|jsx?|typescript)?\n(.*?)```', text, re.DOTALL)
+        return match.group(1) if match else None
+
+    def _save_code(self, filename, code):
+        safe_name = filename.replace("/", "_").replace("\\", "_")
+        if not safe_name.endswith((".tsx", ".ts")): safe_name += ".tsx"
+        path = os.path.join(self.code_dir, safe_name)
+        with open(path, 'w', encoding='utf-8') as f: f.write(code)
+        return path
 
 
 class VisualRAGPipeline:

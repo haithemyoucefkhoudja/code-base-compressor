@@ -17,6 +17,7 @@ ATLAS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_pat
 COORDS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles.coords.json"
 MAP_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles.map.json"
 VOCAB_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles.vocab.json"
+PATTERNS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns.json"
 FONT_PATH = "arial.ttf"
 
 # --- Helper: Color Logic ---
@@ -48,15 +49,33 @@ class VisualContext:
 class InspectionResult:
     """Result of inspecting a component's visual tile."""
     family: str
-    image_bytes: bytes
+    # image_bytes: bytes
     neighbors: List[str]
     color_analysis: Dict[str, int]  # family -> pixel count
     density: str  # "sparse", "medium", "dense"
+    props: List[str]
 
 # --- Tool 1: Visual Decoder (The Eyes) ---
 
 class VisualDecoder:
-    def __init__(self, atlas_path: str = ATLAS_PATH, coords_path: str = COORDS_PATH, map_path: str = MAP_PATH):
+    def __init__(self, atlas_path: str = ATLAS_PATH, coords_path: str = COORDS_PATH, map_path: str = MAP_PATH, repo_patterns_path:str=PATTERNS_PATH):
+        with open(repo_patterns_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    
+        registry = {}
+    
+        def register(name, src, kind, props):
+            if not name: return
+            if not src: src = "unknown"
+            key = f"{src}::{name}"
+            registry[key] = {"name": name, "source": src, "type": kind, "props":props}
+            
+        for p in data.get("call_patterns", []): register(p.get("chain"), p.get("source_import"), "call", [])
+        for p in data.get("jsx_patterns", []): register(p.get("component"), p.get("source_import"), "jsx",p.get("common_props"))
+        for p in data.get("constant_patterns", []): register(p.get("constant"), p.get("source_import"), "const",[])
+        for p in data.get("component_definitions", []): register(p.get("component"), p.get("file"), "def",p.get("props"))
+        for p in data.get("reference_patterns", []): register(p.get("name"), p.get("source_import"), "ref",[])
+        self.registry = registry
         self.atlas_path = atlas_path
         self.coords_path = coords_path
         self.map_path = map_path
@@ -99,10 +118,46 @@ class VisualDecoder:
             
         return VisualContext(img, coords_map, palette)
 
+    def _normalize_family(self, family: str) -> str:
+        """Standardize family names for robust lookup."""
+        if not family: return family
+        
+        # 1. Clean up outer quotes and whitespace
+        cleaned = family.strip().strip('"').strip("'")
+        
+        # 2. Normalize path separators to backslashes
+        normalized = cleaned.replace('/', '\\')
+        
+        # 3. Direct match
+        if normalized in self.context.coords:
+            return normalized
+            
+        # 4. Handle mixed separators (some tools might use both)
+        # Already handled by .replace('/', '\\') but let's be sure
+        
+        # 5. Handle internal quoting inconsistencies (e.g., "source"::name)
+        if '::' in normalized:
+            source, name = normalized.split('::', 1)
+            # Try variations of the source part
+            variations = [
+                f'"{source}"::{name}',    # Add quotes
+                f'{source.strip('"')}::{name}' # Remove quotes
+            ]
+            for var in variations:
+                if var in self.context.coords:
+                    return var
+                    
+        # 6. Try adding/removing quotes from the entire string
+        if f'"{normalized}"' in self.context.coords:
+            return f'"{normalized}"'
+            
+        return normalized
+
     def crop_and_decode(self, family: str) -> Tuple[Optional[Image.Image], List[str]]:
         """
         Inspect a single family's bbox, return the image crop and list of found sub-families.
         """
+        family = self._normalize_family(family)
         if family not in self.context.coords: 
             return None, []
         meta = self.context.coords[family]
@@ -133,7 +188,7 @@ class VisualDecoder:
             
         return crop, list(found_families)
 
-    def inspect(self, family: str) -> Optional[InspectionResult]:
+    def inspect(self, family: str) -> Optional[Tuple[bytes,InspectionResult]]:
         """
         Full inspection of a component - returns structured data.
         """
@@ -170,9 +225,13 @@ class VisualDecoder:
         buf = io.BytesIO()
         crop.save(buf, format='PNG')
         
-        return InspectionResult(
+        # Normalize family for registry lookup
+        norm_family = self._normalize_family(family)
+        reg_entry = self.registry.get(norm_family) or {}
+        
+        return buf.getvalue(), InspectionResult(
+            props=reg_entry.get('props') or [],
             family=family,
-            image_bytes=buf.getvalue(),
             neighbors=neighbors,
             color_analysis=color_counts,
             density=density
@@ -187,8 +246,10 @@ class VisualDecoder:
         crops: List[Tuple[Image.Image, str]] = []
         
         for family in families:
-            result = self.inspect(family)
-            if result:
+            res = self.inspect(family)
+
+            if res:
+                _,result  = res
                 results.append(result)
                 # Re-get crop for stitching
                 crop, _ = self.crop_and_decode(family)
@@ -223,24 +284,15 @@ class VisualDecoder:
         total_w = cols * (max_w + PAD) + PAD
         total_h = rows * (max_h + LABEL_H + PAD) + PAD
         
-        canvas = Image.new("RGB", (total_w, total_h), (40, 44, 52))
+        canvas = Image.new("RGB", (total_w, total_h), 0)
         draw = ImageDraw.Draw(canvas)
         
-        try:
-            font = ImageFont.truetype(FONT_PATH, 16)
-        except:
-            font = ImageFont.load_default()
         
-        for i, (crop, label) in enumerate(crops):
+        for i, (crop, _) in enumerate(crops):
             col = i % cols
             row = i // cols
-            
             x = PAD + col * (max_w + PAD)
             y = PAD + row * (max_h + LABEL_H + PAD)
-            
-            # Draw label
-            draw.text((x, y), label[:30], fill=(200, 200, 200), font=font)
-            
             # Draw border and paste
             y += LABEL_H
             draw.rectangle([x-2, y-2, x+crop.width+2, y+crop.height+2], outline=(100, 100, 100))
@@ -311,26 +363,13 @@ class Composer:
 class VocabularyIndex:
     """Searchable vocabulary from the codebase."""
     
-    def __init__(self, vocab_path: str = VOCAB_PATH):
+    def __init__(self, vocab_path: str = VOCAB_PATH, repo_patterns_path:str=PATTERNS_PATH):
+        
         with open(vocab_path, 'r') as f:
             raw = json.load(f)
             self.vocab = list(raw.keys()) if isinstance(raw, dict) else raw
         print(f"📚 Vocabulary loaded: {len(self.vocab)} families")
-    
-    def search(self, concept: str) -> List[str]:
-        """Substring search in vocabulary."""
-        concept = concept.strip().lower()
-        matches = [k for k in self.vocab if concept in k.lower()]
-        matches.sort(key=len)
-        return matches[:10]
-    
-    def bulk_search(self, concepts: List[str]) -> Dict[str, List[str]]:
-        """Search multiple concepts at once."""
-        results = {}
-        for concept in concepts:
-            results[concept] = self.search(concept)
-        return results
-    
+        
     def get_all(self) -> List[str]:
         """Return full vocabulary."""
         return self.vocab.copy()
