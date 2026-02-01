@@ -1,0 +1,6 @@
+venv
+__pycache__
+repo/
+*_patterns.json
+repo_*
+2026*
