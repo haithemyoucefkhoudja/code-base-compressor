@@ -335,7 +335,7 @@ def encode_rows_to_image(
 if __name__ == "__main__":
     import re
     if len(sys.argv) < 2:
-        print("Usage: python tiles_fixed.py <input.json>")
+        print("Usage: python tiles.py <input.json>")
         sys.exit(1)
         
     input_path = sys.argv[1]

@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 PIL.Image.MAX_IMAGE_PIXELS = None
 
 # --- Configuration ---
-ATLAS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles.png"
-LEGEND_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles_legend.png"
+ATLAS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.png"
+LEGEND_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles_legend.png"
 
 
 # --- Orchestrator System Prompt (Optimized) ---
@@ -425,7 +425,8 @@ class WorkerAgent:
         self.output_dir = output_dir
         self.code_dir = os.path.join(output_dir, "code")
         os.makedirs(self.code_dir, exist_ok=True)
-        
+        with open(LEGEND_PATH, 'rb') as f:
+            self.legend_bytes = f.read()        
         self.worker_logger = logging.getLogger("worker")
         log_path = os.path.join(output_dir, "worker.log")
         fh = logging.FileHandler(log_path, encoding='utf-8')
@@ -446,6 +447,8 @@ class WorkerAgent:
         prompt:List[Part] = [
             Part(text=WORKER_PROMPT),
             Part(text=f"\n### TARGET FILE: {filename}\n### DESCRIPTION: {task.get('description', '')}\n"),
+            Part(text="\n### THE LEGEND (DECODE KEY)\nUse this to understand what the colors in the reference mean.\n"),
+            Part.from_bytes(data=self.legend_bytes, mime_type="image/png")
         ]
         
         if ref_bytes:
@@ -718,6 +721,6 @@ class VisualRAGPipeline:
 if __name__ == "__main__":
     # Run full pipeline
     pipeline = VisualRAGPipeline()
-    pipeline.run("I need a dashboard with a transaction table. Full implementation.")
+    pipeline.run("I want to Implement ANY MCP inside my blimpt app what are the steps & what i need to change")
 
 

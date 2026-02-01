@@ -46,7 +46,7 @@ def main():
         try:
             with open(file_path, 'rb') as f:
                 source_code = f.read()
-            calls, jsxs, cdefs, tdefs,csdefs,refs = extract_usages(file_path, source_code)
+            calls, jsxs, cdefs, tdefs, csdefs, refs = extract_usages(file_path, source_code)
             all_calls.extend(calls)
             all_jsxs.extend(jsxs)
             all_component_defs.extend(cdefs)

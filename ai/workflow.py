@@ -7,17 +7,17 @@ Provides the visual inspection and composition capabilities for the Agent.
 import os
 import json
 import hashlib
-from typing import Dict, List, Set, Tuple, Optional, Any
-from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 import io
 
 # Configuration Constants
-ATLAS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles.png"
-COORDS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles.coords.json"
-MAP_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles.map.json"
-VOCAB_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns_tiles.vocab.json"
-PATTERNS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_patterns.json"
+ATLAS_PATH = r"c:\\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.png"
+COORDS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.coords.json"
+MAP_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.map.json"
+VOCAB_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.vocab.json"
+PATTERNS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns.json"
 FONT_PATH = "arial.ttf"
 
 # --- Helper: Color Logic ---
