@@ -1,0 +1,60 @@
+[
+  {
+    "chain": "setMessages",
+    "source_import": "Declaration",
+    "frequency": 17,
+    "files": [
+      "repo_blimpt\\components\\shortcut-ui\\history.tsx",
+      "repo_blimpt\\providers\\chat-provider.tsx"
+    ],
+    "sub_patterns": [
+      "setMessages"
+    ],
+    "signature": {
+      "type": "function",
+      "parameters": [
+        "React.Dispatch<React.SetStateAction<Message[]>>"
+      ],
+      "return_type": "unknown",
+      "return_type_expanded": null
+    },
+    "call_variations": [
+      {
+        "args": [
+          "function"
+        ],
+        "count": 13
+      },
+      {
+        "args": [
+          "React.Dispatch<React.SetStateAction<Message[]>>"
+        ],
+        "count": 2
+      },
+      {
+        "args": [
+          "unknown"
+        ],
+        "count": 1
+      },
+      {
+        "args": [
+          "identifier"
+        ],
+        "count": 1
+      }
+    ],
+    "abstract_forms": [
+      "setMessages()",
+      "setMessages(fn() => { prev })",
+      "setMessages(fn() => { prev.filter(fn() => { id }) })",
+      "setMessages(fn() => { prev.map(fn() => { id { ... } }) })",
+      "setMessages(fn() => { prev.map(fn() => { id { ..., sources: , timestamp: Date().toISOString() } }) })",
+      "setMessages(fn() => { prev.map(fn() => { id { ..., sources: ID } }) })",
+      "setMessages(fn() => { prevMsgs.map(fn() => { id { ... } }) })",
+      "setMessages(fn() => { prevMsgs.map(fn() => { id { ..., sources: ID } }) })",
+      "setMessages(fn() => { prevMsgs.map(fn() => { id { gamification: ID } }) })",
+      "setMessages(history)"
+    ]
+  }
+]

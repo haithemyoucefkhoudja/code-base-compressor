@@ -7,6 +7,7 @@ import json
 import argparse
 from analyzer.config import PATTERNS
 from analyzer.extractors.usages import extract_usages
+from analyzer.models import TypeDefinition
 from analyzer.processing.aggregators import group_and_filter
 from analyzer.processing.cleaning import clean_call_patterns, clean_jsx_patterns, clean_constant_patterns
 
@@ -66,18 +67,22 @@ def main():
     cleaned_calls = clean_call_patterns(call_patterns)
     cleaned_jsx = clean_jsx_patterns(jsx_patterns)
     cleaned_constants = clean_constant_patterns(const_patterns)
-    cleaned_components = all_component_defs
     # Create a set of all names already captured to avoid duplicates
     captured_names = set()
     captured_names.update(jsx['component'] for jsx in cleaned_jsx)
     for jsx in cleaned_jsx:
         captured_names.update(jsx.get('sub_components', []))
     
+    
+    captured_names.update(typedef.name for typedef in all_type_defs)
+
     captured_names.update(call['chain'] for call in cleaned_calls)
     for call in cleaned_calls:
         captured_names.update(call.get('sub_patterns', []))
     
-    captured_names.update(comp.name for comp in cleaned_components)
+    
+    cleaned_components = [comp for comp in all_component_defs if comp.name not in captured_names]
+    captured_names.update(comp.name for comp  in cleaned_components)
 
     # Filter constants: Remove if already in captured_names
     cleaned_constants = [c for c in cleaned_constants if c['constant'] not in captured_names]
@@ -143,11 +148,11 @@ def main():
     }
 
     # Filter definitions based on presence in cleaned patterns
-    active_patterns = set()
-    for c in cleaned_calls: active_patterns.add(c['chain'])
-    for j in cleaned_jsx: active_patterns.add(j['component'])
-    for k in cleaned_constants: active_patterns.add(k['constant'])
-    for r in cleaned_references: active_patterns.add(r['name'])
+    # active_patterns = set()
+    # for c in cleaned_calls: active_patterns.add(c['chain'])
+    # for j in cleaned_jsx: active_patterns.add(j['component'])
+    # for k in cleaned_constants: active_patterns.add(k['constant'])
+    # for r in cleaned_references: active_patterns.add(r['name'])
 
     final_output = {
         "summary": summary,
@@ -162,8 +167,7 @@ def main():
     for c in cleaned_components:
         if c.name == 'ChatProvider':
             print("c.code", c.abstract_forms)
-            print(c.name in active_patterns)
-        if c.name not in active_patterns:
+        if c.name:
             final_output["component_definitions"].append({
                 "component": c.name,
                 "file": os.path.relpath(c.file, target_repo_path),

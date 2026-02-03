@@ -54,6 +54,53 @@ def resolve_import_path(base_file_path: str, import_source: str) -> Optional[str
     # Strip surrounding quotes that may come from AST extraction
     import_source = import_source.strip("\"'")
 
+    # Handle @/ alias
+    if import_source.startswith("@/"):
+        # Find repo root
+        p = Path(base_file_path).resolve()
+        repo_root = None
+        for _ in range(10):
+            if (p / "dist-types").exists() or (p / "package.json").exists():
+                repo_root = p
+                break
+            if p.parent == p:
+                break
+            p = p.parent
+            
+        if repo_root:
+            relative = import_source[2:]
+            # Try root and src
+            bases = [repo_root / relative, repo_root / "src" / relative]
+            
+            for candidate_base in bases:
+                try:
+                   candidate_base = candidate_base.resolve()
+                except:
+                    continue
+                    
+                # Check directly
+                if candidate_base.is_file():
+                    return str(candidate_base)
+                
+                # Check extensions
+                extensions = [".d.ts", ".ts", ".tsx", ".js", ".jsx"]
+                if candidate_base.is_dir():
+                    for ext in extensions:
+                        p_idx = candidate_base / f"index{ext}"
+                        if p_idx.is_file():
+                            dts = find_dts_file(str(p_idx))
+                            if dts: return dts
+                            return str(p_idx)
+                            
+                for ext in extensions:
+                     p_ext = Path(str(candidate_base) + ext)
+                     if p_ext.is_file():
+                         dts = find_dts_file(str(p_ext))
+                         if dts: return dts
+                         return str(p_ext)
+            
+            return None        
+
     # Ignore node_modules for now unless we want to be very fancy
     if not import_source.startswith("."):
         # TODO: Handle node_modules resolution if needed
@@ -469,9 +516,12 @@ def parse_dts_definitions(dts_path: str) -> Dict[str, Dict[str, Any]]:
                         props_map = {}
                         params_list = []
                         def_type = "unknown"
+                        return_type_val = "unknown"
+                        return_type_expanded = None
                         
                         # Helper to unwrap types
                         def resolve_props_from_type_node(tnode: Node):
+                            nonlocal return_type_val, return_type_expanded
                             potential_targets = [tnode]
                             if tnode.type == "type_annotation":
                                 potential_targets = tnode.children
@@ -487,6 +537,14 @@ def parse_dts_definitions(dts_path: str) -> Dict[str, Dict[str, Any]]:
                                                 if ptype:
                                                     p_type_str = extract_type_annotation(ptype, source)
                                                 params_list.append(p_type_str)
+                                    
+                                    # Extract return type
+                                    rt_node = sub.child_by_field_name("return_type")
+                                    if rt_node:
+                                        return_type_val = extract_type_annotation(rt_node, source)
+                                        if return_type_val in interface_defs:
+                                            return_type_expanded = interface_defs[return_type_val]
+
                                     return "const_function"
 
                                 elif sub.type == "object_type":
@@ -512,7 +570,8 @@ def parse_dts_definitions(dts_path: str) -> Dict[str, Dict[str, Any]]:
                             definitions[name] = {
                                 "props": props_map,
                                 "parameters": params_list,
-                                "return_type": "unknown",
+                                "return_type": return_type_val,
+                                "return_type_expanded": return_type_expanded,
                                 "type": def_type
                             }
                         

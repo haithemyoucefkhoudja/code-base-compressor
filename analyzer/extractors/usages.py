@@ -259,6 +259,8 @@ def extract_usages(file_path: str, source_code: bytes) -> Tuple[List[CallUsage],
     if dts_path:
         dts_defs = parse_dts_definitions(dts_path)
     
+    scope_types = {} # { var_name: dts_info }
+
     def walk(node: Node, context: List[str] = []):
         current_context = context[:]
         
@@ -275,10 +277,14 @@ def extract_usages(file_path: str, source_code: bytes) -> Tuple[List[CallUsage],
                 if chain != "<unknown>":
                     c_props, c_prop_types = extract_call_args(node, source)
                     
-                    # Override with authoritative DTS types if available
-                    dts_info = dts_defs.get(chain)
+                    # 1. Try scope types first (local overrides from hooks/destructuring)
+                    dts_info = scope_types.get(chain)
+
+                    # 2. Override with authoritative DTS types if available
+                    if not dts_info:
+                        dts_info = dts_defs.get(chain)
                     
-                    # If not found in current file's .d.ts, try external .d.ts
+                    # 3. If not found in current file's .d.ts, try external .d.ts
                     if not dts_info:
                         import_src = findImportSource(extracted_imports_dict, chain)
                         if import_src and import_src != "Declaration":
@@ -286,6 +292,36 @@ def extract_usages(file_path: str, source_code: bytes) -> Tuple[List[CallUsage],
                             if ext_def_path:
                                 ext_defs = parse_dts_definitions(ext_def_path)
                                 dts_info = ext_defs.get(chain)
+                    
+                    # Hook return analysis (Destructuring)
+                    if chain.startswith("use") and dts_info and dts_info.get("return_type_expanded"):
+                        parent = node.parent
+                        if parent and parent.type == "variable_declarator":
+                            name_node = parent.child_by_field_name("name")
+                            if name_node and name_node.type == "object_pattern":
+                                ret_expanded = dts_info["return_type_expanded"]
+                                for child in name_node.children:
+                                    var_name = None
+                                    prop_name = None
+                                    
+                                    if child.type == "shorthand_property_identifier_pattern":
+                                        var_name = source[child.start_byte:child.end_byte].decode('utf-8')
+                                        prop_name = var_name
+                                    elif child.type == "pair_pattern":
+                                        key_node = child.child_by_field_name("key")
+                                        val_node = child.child_by_field_name("value")
+                                        if key_node and val_node:
+                                            prop_name = source[key_node.start_byte:key_node.end_byte].decode('utf-8')
+                                            var_name = source[val_node.start_byte:val_node.end_byte].decode('utf-8')
+                                    
+                                    if var_name and prop_name and prop_name in ret_expanded:
+                                        # Create a pseudo dts_info for this variable
+                                        type_str = ret_expanded[prop_name]
+                                        scope_types[var_name] = {
+                                            "parameters": [type_str], # Best effort mapping
+                                            "type": "function",
+                                            "return_type": "unknown"
+                                        }
                     
                     # Fallback: check global function registry (for destructured hook returns)
                     if not dts_info:
@@ -322,8 +358,14 @@ def extract_usages(file_path: str, source_code: bytes) -> Tuple[List[CallUsage],
                                 "methods": dts_info.get("methods"),
                                 "properties": dts_info.get("properties")
                             }
-                        elif dts_info.get("parameters"):
-                            dts_signature = dts_info["parameters"]
+                        elif dts_info.get("parameters") is not None:
+                            # For functions, include parameters and return type
+                            dts_signature = {
+                                "type": "function",
+                                "parameters": dts_info["parameters"],
+                                "return_type": dts_info.get("return_type"),
+                                "return_type_expanded": dts_info.get("return_type_expanded")
+                            }
                     
                     calls.append(CallUsage(
                         chain=chain,

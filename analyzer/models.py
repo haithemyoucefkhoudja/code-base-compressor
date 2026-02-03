@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional
+from typing import Any, List, Dict,  Optional
 
 @dataclass
 class CallUsage:
@@ -15,7 +15,7 @@ class CallUsage:
     prop_types: Dict[str, str] = field(default_factory=dict) # Map of prop/arg name (or index) to its type
     return_type: str = "" # Inferred return type
     context: List[str] = field(default_factory=list) # Stack of parent call/structures
-    dts_signature: Optional[List[Dict]] = None  # Type signature from .d.ts (constructor_params or parameters)
+    dts_signature: dict[str, Any] | None = None  # Type signature from .d.ts (constructor_params or parameters)
 
 @dataclass(unsafe_hash=True)
 class ReferenceUsage:

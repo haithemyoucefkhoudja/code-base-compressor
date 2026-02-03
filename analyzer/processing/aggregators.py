@@ -4,7 +4,7 @@ from typing import List, Dict, Tuple
 from ..models import CallUsage, JSXUsage, ConstantDefinition
 from ..core.node_utils  import import_name
 
-def group_and_filter(all_calls: List[CallUsage], all_jsxs: List[JSXUsage], all_constant_defs: List[ConstantDefinition], all_references: List[ReferenceUsage], threshold_percent: float = 0.25, min_freq: int = 2) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict], List[str]]:
+def group_and_filter(all_calls: List[CallUsage], all_jsxs: List[JSXUsage], all_constant_defs: List[ConstantDefinition], all_references: List[ReferenceUsage], threshold_percent: float = 0.25, min_freq: int = 1) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict], List[str]]:
     """Groups call and JSX usages, and filters them based on a dynamic frequency threshold."""
     
     # Group calls by FULL CHAIN and SOURCE IMPORT

@@ -1,0 +1,1342 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Generated schema for Root",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "object",
+      "properties": {
+        "total_calls": {
+          "type": "number"
+        },
+        "total_jsx": {
+          "type": "number"
+        },
+        "total_constants": {
+          "type": "number"
+        },
+        "unique_call_chains": {
+          "type": "number"
+        },
+        "unique_components": {
+          "type": "number"
+        },
+        "unique_constants": {
+          "type": "number"
+        },
+        "unique_references": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "total_calls",
+        "total_jsx",
+        "total_constants",
+        "unique_call_chains",
+        "unique_components",
+        "unique_constants",
+        "unique_references"
+      ]
+    },
+    "vocabulary": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "call_patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "source_import": {
+            "type": "string"
+          },
+          "source_imports": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "frequency": {
+            "type": "number"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sub_patterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "signature": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "return_type": {
+                "type": "string"
+              },
+              "return_type_expanded": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string"
+                  },
+                  "isInitialized": {
+                    "type": "string"
+                  },
+                  "conversations": {
+                    "type": "string"
+                  },
+                  "fetchNextPage": {
+                    "type": "string"
+                  },
+                  "hasNextPage": {
+                    "type": "string"
+                  },
+                  "isLoading": {
+                    "type": "string"
+                  },
+                  "isError": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "dockerMessage": {
+                    "type": "string"
+                  },
+                  "updateDockerMessage": {
+                    "type": "string"
+                  },
+                  "isFirstRender": {
+                    "type": "string"
+                  },
+                  "firstRenderRef": {
+                    "type": "string"
+                  },
+                  "hidden": {
+                    "type": "string"
+                  },
+                  "setIsFirstRender": {
+                    "type": "string"
+                  },
+                  "handleAppShortcut": {
+                    "type": "string"
+                  },
+                  "searchMode": {
+                    "type": "string"
+                  },
+                  "setSearchMode": {
+                    "type": "string"
+                  },
+                  "input": {
+                    "type": "string"
+                  },
+                  "setInput": {
+                    "type": "string"
+                  },
+                  "emptyInput": {
+                    "type": "string"
+                  },
+                  "attachments": {
+                    "type": "string"
+                  },
+                  "handleFileChange": {
+                    "type": "string"
+                  },
+                  "addAttachment": {
+                    "type": "string"
+                  },
+                  "removeAttachment": {
+                    "type": "string"
+                  },
+                  "clearAttachments": {
+                    "type": "string"
+                  },
+                  "fileInputRef": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "string"
+                  },
+                  "setPort": {
+                    "type": "string"
+                  },
+                  "config": {
+                    "type": "string"
+                  },
+                  "updateConfig": {
+                    "type": "string"
+                  },
+                  "saveConfig": {
+                    "type": "string"
+                  },
+                  "isUpdated": {
+                    "type": "string"
+                  },
+                  "isDeepThinking": {
+                    "type": "string"
+                  },
+                  "setIsDeepThinking": {
+                    "type": "string"
+                  },
+                  "isSearch": {
+                    "type": "string"
+                  },
+                  "setIsSearch": {
+                    "type": "string"
+                  },
+                  "vertical": {
+                    "type": "string"
+                  },
+                  "horizontal": {
+                    "type": "string"
+                  },
+                  "setLAYOUT_SWITCH": {
+                    "type": "string"
+                  },
+                  "isCacheCleared": {
+                    "type": "string"
+                  },
+                  "setIsCacheCleared": {
+                    "type": "string"
+                  },
+                  "messages": {
+                    "type": "string"
+                  },
+                  "pinnedMessage": {
+                    "type": "string"
+                  },
+                  "lastMessage": {
+                    "type": "string"
+                  },
+                  "conversation": {
+                    "type": "string"
+                  },
+                  "stopRef": {
+                    "type": "string"
+                  },
+                  "stop": {
+                    "type": "string"
+                  },
+                  "setStop": {
+                    "type": "string"
+                  },
+                  "setMessages": {
+                    "type": "string"
+                  },
+                  "setConversation": {
+                    "type": "string"
+                  },
+                  "setLastMessage": {
+                    "type": "string"
+                  },
+                  "setPinnedMessage": {
+                    "type": "string"
+                  },
+                  "closeLastMessage": {
+                    "type": "string"
+                  },
+                  "toggleLastMessage": {
+                    "type": "string"
+                  },
+                  "closePinnedMessage": {
+                    "type": "string"
+                  },
+                  "togglePinnedMessage": {
+                    "type": "string"
+                  },
+                  "setError": {
+                    "type": "string"
+                  },
+                  "pinMessage": {
+                    "type": "string"
+                  },
+                  "rewrite": {
+                    "type": "string"
+                  },
+                  "newChatStarter": {
+                    "type": "string"
+                  },
+                  "handleFormSubmit": {
+                    "type": "string"
+                  }
+                },
+                "required": []
+              },
+              "kind": {
+                "type": "string"
+              },
+              "constructor": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "expanded": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "searchWeb": {
+                          "type": "string"
+                        },
+                        "rerank": {
+                          "type": "string"
+                        },
+                        "summarizer": {
+                          "type": "string"
+                        },
+                        "rerankThreshold": {
+                          "type": "string"
+                        },
+                        "queryGeneratorPrompt": {
+                          "type": "string"
+                        },
+                        "responsePrompt": {
+                          "type": "string"
+                        },
+                        "activeEngines": {
+                          "type": "string"
+                        }
+                      },
+                      "required": []
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "type",
+                    "expanded"
+                  ]
+                }
+              },
+              "methods": {
+                "type": "object",
+                "properties": {
+                  "lc_name": {
+                    "type": "object",
+                    "properties": {
+                      "params": {
+                        "type": "array",
+                        "items": {}
+                      },
+                      "return_type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "params",
+                      "return_type"
+                    ]
+                  },
+                  "parse": {
+                    "type": "object",
+                    "properties": {
+                      "params": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type"
+                          ]
+                        }
+                      },
+                      "return_type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "params",
+                      "return_type"
+                    ]
+                  },
+                  "getFormatInstructions": {
+                    "type": "object",
+                    "properties": {
+                      "params": {
+                        "type": "array",
+                        "items": {}
+                      },
+                      "return_type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "params",
+                      "return_type"
+                    ]
+                  },
+                  "searchAndAnswer": {
+                    "type": "object",
+                    "properties": {
+                      "params": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type"
+                          ]
+                        }
+                      },
+                      "return_type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "params",
+                      "return_type"
+                    ]
+                  },
+                  "_convertOpenAIDeltaToBaseMessageChunk": {
+                    "type": "object",
+                    "properties": {
+                      "params": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type"
+                          ]
+                        }
+                      },
+                      "return_type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "params",
+                      "return_type"
+                    ]
+                  },
+                  "_convertOpenAIChatCompletionMessageToBaseMessage": {
+                    "type": "object",
+                    "properties": {
+                      "params": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "type"
+                          ]
+                        }
+                      },
+                      "return_type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "params",
+                      "return_type"
+                    ]
+                  }
+                },
+                "required": []
+              },
+              "properties": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "modifiers": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "modifiers"
+                    ]
+                  },
+                  "lc_namespace": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "modifiers": {
+                        "type": "array",
+                        "items": {}
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "modifiers"
+                    ]
+                  },
+                  "emitter": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "modifiers": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "modifiers"
+                    ]
+                  },
+                  "config": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "modifiers": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "modifiers"
+                    ]
+                  },
+                  "strParser": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "modifiers": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "modifiers"
+                    ]
+                  },
+                  "createSearchRetrieverChain": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "modifiers": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "modifiers"
+                    ]
+                  },
+                  "createAnsweringChain": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "modifiers": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "modifiers"
+                    ]
+                  },
+                  "processDocs": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "modifiers": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "modifiers"
+                    ]
+                  },
+                  "handleStream": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "modifiers": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "modifiers"
+                    ]
+                  }
+                },
+                "required": []
+              }
+            },
+            "required": []
+          },
+          "call_variations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "args": {
+                  "type": "array",
+                  "items": {}
+                },
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "args",
+                "count"
+              ]
+            }
+          },
+          "abstract_forms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "chain",
+          "source_import",
+          "frequency",
+          "files",
+          "sub_patterns",
+          "call_variations",
+          "abstract_forms"
+        ]
+      }
+    },
+    "jsx_patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "source_import": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "number"
+          },
+          "common_props": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sub_components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "shapes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "props": {
+                  "type": "object",
+                  "properties": {
+                    "size": {
+                      "type": "string"
+                    },
+                    "variant": {
+                      "type": "string"
+                    },
+                    "onClick": {
+                      "type": "string"
+                    },
+                    "className": {
+                      "type": "string"
+                    },
+                    "disabled": {
+                      "type": "string"
+                    },
+                    "onMouseEnter": {
+                      "type": "string"
+                    },
+                    "onMouseLeave": {
+                      "type": "string"
+                    },
+                    "asChild": {
+                      "type": "string"
+                    },
+                    "key": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "ref": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "aria-label": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "data-day": {
+                      "type": "string"
+                    },
+                    "data-selected-single": {
+                      "type": "string"
+                    },
+                    "data-range-start": {
+                      "type": "string"
+                    },
+                    "data-range-end": {
+                      "type": "string"
+                    },
+                    "data-range-middle": {
+                      "type": "string"
+                    },
+                    "data-size": {
+                      "type": "string"
+                    },
+                    "data-sidebar": {
+                      "type": "string"
+                    },
+                    "data-tauri-drag-region": {
+                      "type": "string"
+                    },
+                    "align": {
+                      "type": "string"
+                    },
+                    "side": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "onValueChange": {
+                      "type": "string"
+                    },
+                    "placeholder": {
+                      "type": "string"
+                    },
+                    "onChange": {
+                      "type": "string"
+                    },
+                    "min": {
+                      "type": "string"
+                    },
+                    "max": {
+                      "type": "string"
+                    },
+                    "autoFocus": {
+                      "type": "string"
+                    },
+                    "onKeyDown": {
+                      "type": "string"
+                    },
+                    "data-slot": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "open": {
+                      "type": "string"
+                    },
+                    "onOpenChange": {
+                      "type": "string"
+                    },
+                    "orientation": {
+                      "type": "string"
+                    },
+                    "htmlFor": {
+                      "type": "string"
+                    },
+                    "sideOffset": {
+                      "type": "string"
+                    },
+                    "checked": {
+                      "type": "string"
+                    },
+                    "data-active": {
+                      "type": "string"
+                    },
+                    "data-variant": {
+                      "type": "string"
+                    },
+                    "modal": {
+                      "type": "string"
+                    },
+                    "data-mobile": {
+                      "type": "string"
+                    },
+                    "style": {
+                      "type": "string"
+                    },
+                    "onMouseDown": {
+                      "type": "string"
+                    },
+                    "color": {
+                      "type": "string"
+                    },
+                    "aria-hidden": {
+                      "type": "string"
+                    },
+                    "pressed": {
+                      "type": "string"
+                    },
+                    "onPressedChange": {
+                      "type": "string"
+                    },
+                    "onCheckedChange": {
+                      "type": "string"
+                    },
+                    "rewrite": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "messageIndex": {
+                      "type": "string"
+                    },
+                    "isFixed": {
+                      "type": "string"
+                    },
+                    "delayDuration": {
+                      "type": "string"
+                    },
+                    "hidden": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "shortcut": {
+                      "type": "string"
+                    },
+                    "isEditing": {
+                      "type": "string"
+                    },
+                    "currentKeys": {
+                      "type": "string"
+                    },
+                    "onEdit": {
+                      "type": "string"
+                    },
+                    "onSave": {
+                      "type": "string"
+                    },
+                    "onCancel": {
+                      "type": "string"
+                    },
+                    "onLoadMore": {
+                      "type": "string"
+                    },
+                    "hasMore": {
+                      "type": "string"
+                    },
+                    "isLoading": {
+                      "type": "string"
+                    },
+                    "LAYOUT_MODE": {
+                      "type": "string"
+                    },
+                    "selectedModel": {
+                      "type": "string"
+                    },
+                    "models": {
+                      "type": "string"
+                    },
+                    "onModelChange": {
+                      "type": "string"
+                    },
+                    "defaultTheme": {
+                      "type": "string"
+                    },
+                    "storageKey": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "element": {
+                      "type": "string"
+                    },
+                    "ItemContent": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "string"
+                    },
+                    "providers": {
+                      "type": "string"
+                    },
+                    "updateProviders": {
+                      "type": "string"
+                    },
+                    "updateModels": {
+                      "type": "string"
+                    },
+                    "maxHeight": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "type": "string"
+                    },
+                    "searchModes": {
+                      "type": "string"
+                    },
+                    "selectedSearchMode": {
+                      "type": "string"
+                    },
+                    "onSearchModeChange": {
+                      "type": "string"
+                    },
+                    "activeWindow": {
+                      "type": "string"
+                    },
+                    "setActiveWindow": {
+                      "type": "string"
+                    },
+                    "sources": {
+                      "type": "string"
+                    },
+                    "reasoning": {
+                      "type": "string"
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "initialMessage": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "string"
+                    },
+                    "onSizeChange": {
+                      "type": "string"
+                    },
+                    "offset": {
+                      "type": "string"
+                    },
+                    "height": {
+                      "type": "string"
+                    },
+                    "mount": {
+                      "type": "string"
+                    },
+                    "unmount": {
+                      "type": "string"
+                    },
+                    "onFinishUpdate": {
+                      "type": "string"
+                    },
+                    "editor": {
+                      "type": "string"
+                    },
+                    "node": {
+                      "type": "string"
+                    },
+                    "readOnly": {
+                      "type": "string"
+                    },
+                    "onAdd": {
+                      "type": "string"
+                    },
+                    "onDelete": {
+                      "type": "string"
+                    },
+                    "onActive": {
+                      "type": "string"
+                    },
+                    "treeId": {
+                      "type": "string"
+                    },
+                    "onBack": {
+                      "type": "string"
+                    },
+                    "treeName": {
+                      "type": "string"
+                    },
+                    "rootNode": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "selected": {
+                      "type": "string"
+                    },
+                    "onSelect": {
+                      "type": "string"
+                    },
+                    "initialFocus": {
+                      "type": "string"
+                    },
+                    "itemContent": {
+                      "type": "string"
+                    },
+                    "itemSize": {
+                      "type": "string"
+                    },
+                    "overscan": {
+                      "type": "string"
+                    },
+                    "totalListHeightChanged": {
+                      "type": "string"
+                    },
+                    "components": {
+                      "type": "string"
+                    },
+                    "showOutsideDays": {
+                      "type": "string"
+                    },
+                    "captionLayout": {
+                      "type": "string"
+                    },
+                    "formatters": {
+                      "type": "string"
+                    },
+                    "classNames": {
+                      "type": "string"
+                    },
+                    "config": {
+                      "type": "string"
+                    },
+                    "shouldScaleBackground": {
+                      "type": "string"
+                    },
+                    "aria-describedby": {
+                      "type": "string"
+                    },
+                    "aria-invalid": {
+                      "type": "string"
+                    },
+                    "containerClassName": {
+                      "type": "string"
+                    },
+                    "alignOffset": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "remarkPlugins": {
+                      "type": "string"
+                    },
+                    "rehypePlugins": {
+                      "type": "string"
+                    },
+                    "decorative": {
+                      "type": "string"
+                    },
+                    "theme": {
+                      "type": "string"
+                    },
+                    "toastOptions": {
+                      "type": "string"
+                    },
+                    "client": {
+                      "type": "string"
+                    },
+                    "children": {
+                      "type": "string"
+                    },
+                    "isOnline": {
+                      "type": "string"
+                    }
+                  },
+                  "required": []
+                },
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "props",
+                "count"
+              ]
+            }
+          },
+          "abstract_forms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "component",
+          "source_import",
+          "frequency",
+          "common_props",
+          "files",
+          "sub_components",
+          "shapes",
+          "abstract_forms"
+        ]
+      }
+    },
+    "constant_patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "constant": {
+            "type": "string"
+          },
+          "source_import": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "number"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sub_patterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "constant",
+          "source_import",
+          "frequency",
+          "files",
+          "examples",
+          "sub_patterns"
+        ]
+      }
+    },
+    "reference_patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "source_import": {
+            "type": "string"
+          },
+          "usages": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "source_import",
+          "usages"
+        ]
+      }
+    },
+    "component_definitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "abstract_forms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "props": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prop_types": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "string"
+              },
+              "data": {
+                "type": "string"
+              },
+              "onSizeChange": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            },
+            "required": []
+          },
+          "return_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "component",
+          "file",
+          "abstract_forms",
+          "props",
+          "prop_types",
+          "return_type"
+        ]
+      }
+    },
+    "type_definitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "file",
+          "code"
+        ]
+      }
+    }
+  },
+  "required": [
+    "summary",
+    "vocabulary",
+    "call_patterns",
+    "jsx_patterns",
+    "constant_patterns",
+    "reference_patterns",
+    "component_definitions",
+    "type_definitions"
+  ]
+}
