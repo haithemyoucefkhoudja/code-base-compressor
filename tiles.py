@@ -372,7 +372,29 @@ def encode_rows_to_image(
     
     # Generate legend
     legend_path = out_png_path.replace(".png", "_legend.png")
-    generate_legend(list(unique_families), legend_path, cfg)
+    
+    # Filter families for Legend to avoid bloating
+    # 1. Syntax ((){})
+    # 2. Key Markers (TYPE_INFO)
+    # 3. Explicit Headers (Modules) - optional, maybe only show checking '::'
+    # 4. Do NOT show distinct vocabulary tokens if there are thousands.
+    
+    legend_fams = []
+    syntax_chars = {"(", ")", "{", "}", "[", "]", "=>", ".", ",", ":", "TYPE_INFO"}
+    
+    for f in unique_families:
+        if f in syntax_chars:
+            legend_fams.append(f)
+        elif "::" in f:
+             # It's a header/module key?
+             # User might want to see module colors.
+             # Limit to top 200 modules?
+             legend_fams.append(f)
+             
+    # Sort: Syntax first, then Modules
+    legend_fams.sort(key=lambda x: (0 if x in syntax_chars else 1, x))
+    
+    generate_legend(legend_fams, legend_path, cfg)
     
     # Save vocab
     with open(out_png_path.replace(".png", ".vocab.json"), "w", encoding="utf-8") as f:
@@ -418,25 +440,51 @@ if __name__ == "__main__":
     
     # B. Examples
     examples = []
-    token_re = re.compile(r"[\w]+(?:\.[\w]+)*")
+    token_re = re.compile(r"[\w]+(?:\.[\w]+)*|[(){}]")
     
     def resolve(t): return name_map.get(t)
     
     def proc(plist, nkey, fkey):
         for p in plist:
-            hname = p.get(nkey)
+            hname:str = p.get(nkey)
             if not hname: continue
+            
+            # Remove newlines to prevent overlap
+            hname = hname.replace("\n", " ").strip()
+                
             src = p.get("source_import") or p.get("file") or "unknown"
             hkey = f"{src}::{hname}"
             if hkey not in registry: register(hname, src, "auto")
             
+            # Type Encoding Enhancement
+            # If pattern has return type or signature, we add a generic marker or specific type token
+            # User asked for "types the return". 
+            # We can look for 'return_type' or check signature.
+            has_type = False
+            if p.get("return_type") and p.get("return_type") != "unknown":
+                has_type = True
+            elif p.get("signature"):
+                has_type = True
+                
             for f in p.get(fkey, []):
                 tokens = token_re.findall(f)
                 row = [hkey]
+                
+                # Injection: If typed, add a visual indicator (Type Glyph) right after header
+                # We use a special family "TYPE::marker" which will have a consistent color
+                if has_type:
+                    row.append("TYPE_INFO") 
+                
                 for t in tokens:
-                    tok = resolve(t)
-                    if tok:
-                        if t != hname: row.append(tok)
+                    if t in "(){}":
+                        # Syntax Encoding Enhancement
+                        # Pass brackets directly. They become their own family "{" etc.
+                        row.append(t)
+                    else:
+                        tok = resolve(t)
+                        if tok:
+                            if t != hname: row.append(tok)
+                            
                 if len(row) > 0: examples.append(row)
                 
     proc(data.get("call_patterns", []), "chain", "abstract_forms")
