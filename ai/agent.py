@@ -9,6 +9,7 @@ import workflow
 import os
 import json
 import logging
+import argparse
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 import time
@@ -26,10 +27,6 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 PIL.Image.MAX_IMAGE_PIXELS = None
-
-# --- Configuration ---
-ATLAS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.png"
-LEGEND_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles_legend.png"
 
 
 # --- Orchestrator System Prompt (Optimized) ---
@@ -94,7 +91,8 @@ class OrchestratorAgent:
     
     MAX_EXPLORATION_DEPTH = 20
     
-    def __init__(self):
+    def __init__(self, tiles_dir: str):
+        self.tiles_dir = tiles_dir
         self.api_key = "AIzaSyDICBEsgRfPnfx7Rw3yi_9DOq4r7_wwL3Y"
         if not self.api_key:
             raise ValueError("FATAL: API key missing")
@@ -102,9 +100,12 @@ class OrchestratorAgent:
         self.client = genai.Client(api_key=self.api_key)
         
         # Tools (coords/map used internally only)
-        self.decoder = workflow.VisualDecoder()
-        self.vocab_index = workflow.VocabularyIndex()
+        self.decoder = workflow.VisualDecoder(tiles_dir)
+        self.vocab_index = workflow.VocabularyIndex(tiles_dir)
         self.composer = workflow.Composer()
+        
+        # Get legend path from decoder
+        self.legend_path = self.decoder.get_legend_path()
         
         # Output setup
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -130,11 +131,16 @@ class OrchestratorAgent:
         # --- 1. Load Visual Context ---
         logger.info("🖼️ Loading visual assets...")
         
-        with open(ATLAS_PATH, 'rb') as f:
-            atlas_bytes = f.read()
-        logger.info(f"   Atlas: {len(atlas_bytes):,} bytes")
+        # Load all tile images and concatenate
+        atlas_bytes_list = []
+        for atlas_path in self.decoder.atlas_paths:
+            with open(atlas_path, 'rb') as f:
+                atlas_bytes_list.append(f.read())
+        # Use first tile for now (model can see stitched version)
+        atlas_bytes = atlas_bytes_list[0] if atlas_bytes_list else b""
+        logger.info(f"   Atlas: {len(self.decoder.atlas_paths)} tile(s), {sum(len(b) for b in atlas_bytes_list):,} bytes total")
         
-        with open(LEGEND_PATH, 'rb') as f:
+        with open(self.legend_path, 'rb') as f:
             legend_bytes = f.read()
         logger.info(f"   Legend: {len(legend_bytes):,} bytes")
         
@@ -193,9 +199,13 @@ class OrchestratorAgent:
                 if self.exploration_depth >= self.MAX_EXPLORATION_DEPTH:
                     break
                 
-                # If no tools and no plan, but not at max depth, maybe prompt to continue?
-                # For now, we'll just break to be safe.
-                break
+                # Instead of breaking, prompt the model to finalize
+                logger.info("📝 No tool call - prompting model to finalize plan...")
+                history.append(types.Content(
+                    role="user",
+                    parts=[types.Part(text="IF: You've done enough exploration with HIGH CONFIDENCE. Now call `finalize_plan(markdown)` with the complete implementation plan based on your analysis. Structure it with: Summary, Required Dependencies, Discovered Patterns table, and Implementation Tasks.")]
+                ))
+                continue
             
             # Execute tools
             tool_outputs = []
@@ -367,34 +377,50 @@ class OrchestratorAgent:
 WORKER_PROMPT = """
 ### SYSTEM ROLE: The Pattern-Matching Engineer
 
-You are a Senior Developer responsible for implementing a single file based on a **Visual Reference**.
-You are NOT creative. You are mimetic. You clone patterns.
+You are a Senior Developer who implements code by **deeply studying visual references**.
+You are NOT creative. You are mimetic. You CLONE patterns with surgical precision.
+
+### CRITICAL RULE: EXPLORE BEFORE YOU EXPLOIT
+
+**YOU MUST EXPLORE AT LEAST ONCE before calling generate_code.**
+- If you try to generate code without exploring, your output will be rejected.
+- Deep exploration = Precise output. Shallow exploration = Garbage output.
 
 ### INPUTS
-1. **Target File:** The filename you must create.
-2. **Description:** What logic this file must contain.
-3. **Reference Image:** A visual crop of an existing file in the repo that acts as the "Golden Standard".
-4. **Reference Analysis:** Structural data about the reference (neighbors, density, imports).
+1. **Target File:** The filename you must create
+2. **Description:** What logic this file must contain
+3. **Reference Image:** A visual crop of an existing file (the "Golden Standard")
+4. **Reference Analysis:** Structural data (neighbors, density, imports)
 
-### EXPLORE vs EXPLOIT
+### TOOL PROTOCOL
 
-**EXPLORE** - Call `explore_reference(families)` if you need to see sub-components of the reference
-**EXPLOIT** - Call `generate_code(code)` when ready to output the final implementation
+**PHASE 1: MANDATORY EXPLORATION** (at least 1 call required)
+Call `explore_reference(families)` to:
+- Understand how imports are structured in similar files
+- See how state management patterns work in this codebase
+- Discover the actual APIs and hooks being used
+- Learn the JSX/component patterns
 
-### PROTOCOL
-1. **Analyze the Reference Image:**
-   - Look at the **Header**: How are imports structured?
-   - Look at the **Body**: How is state defined? How is JSX returned?
-   - Look at the **Footer**: How are exports handled?
+**PHASE 2: CODE GENERATION** (only after exploration)
+Call `generate_code(code, confidence)` with:
+- `code`: Complete source code for the target file
+- `confidence`: Your confidence level (1-10) that this code matches the patterns
 
-2. **Synthesize Code:**
-   - Write the new code for `Target File`.
-   - Use the *exact* coding style, indentation, and library imports implied by the Reference Image.
-   - If the Reference uses `zod` (Pink tiles), you use `zod`.
-   - If the Reference uses `react-query` (Green tiles), you use `react-query`.
+### EXPLORATION STRATEGY
 
-### OUTPUT
-Call `generate_code(code)` with the complete source code for the requested file.
+Look at the Reference Analysis "neighbors" - these are the most relevant families to explore.
+If the reference shows:
+- React hooks → Explore hook families to see their signatures
+- External APIs → Explore those families to understand the interface
+- Custom components → Explore those components to clone their props
+
+### QUALITY CHECKLIST (before generate_code)
+- [ ] Did I explore at least 1 related family?
+- [ ] Do I understand the import patterns?
+- [ ] Do I know the exact API signatures?
+- [ ] Am I confident this matches the codebase style?
+
+If ANY checkbox is unchecked → EXPLORE MORE.
 """
 
 
@@ -405,9 +431,12 @@ class TaskResult:
     filename: str
     success: bool
     code: Optional[str] = None
-    code_path: Optional[str] = None
+    description: Optional[str] = None
     error: Optional[str] = None
     explorations: int = 0
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
     
 
 class WorkerAgent:
@@ -418,16 +447,15 @@ class WorkerAgent:
     
     MAX_EXPLORATION_DEPTH = 3
 
-    def __init__(self, client, decoder, vocab_index, output_dir: str):
+    def __init__(self, client, decoder, vocab_index, output_dir: str, legend_path: str):
         self.client = client
         self.decoder = decoder
         self.vocab_index = vocab_index
         self.output_dir = output_dir
-        self.code_dir = os.path.join(output_dir, "code")
-        os.makedirs(self.code_dir, exist_ok=True)
-        with open(LEGEND_PATH, 'rb') as f:
+        with open(legend_path, 'rb') as f:
             self.legend_bytes = f.read()        
         self.worker_logger = logging.getLogger("worker")
+
         log_path = os.path.join(output_dir, "worker.log")
         fh = logging.FileHandler(log_path, encoding='utf-8')
         fh.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
@@ -441,25 +469,38 @@ class WorkerAgent:
         
         logger.info(f"🔧 Worker: {task_id} - {filename}")
         
+        # Token tracking
+        total_prompt_tokens = 0
+        total_output_tokens = 0
+        
         # --- Phase 1: Context ---
         ref_bytes, ref_analysis = self._get_reference(reference)
+        
+        # Get vocabulary for grounding
+        vocab = self.vocab_index.get_all()
+        vocab_sample = vocab  # All
         
         prompt:List[Part] = [
             Part(text=WORKER_PROMPT),
             Part(text=f"\n### TARGET FILE: {filename}\n### DESCRIPTION: {task.get('description', '')}\n"),
+            Part(text=f"\n### VOCABULARY (Use ONLY these family names)\n{json.dumps(vocab_sample)}\n"),
             Part(text="\n### THE LEGEND (DECODE KEY)\nUse this to understand what the colors in the reference mean.\n"),
             Part.from_bytes(data=self.legend_bytes, mime_type="image/png")
         ]
         
         if ref_bytes:
             prompt.append(Part(text="\n### REFERENCE VISUAL (CLONE THIS)\n"))
+
             prompt.append(types.Part.from_bytes(data=ref_bytes, mime_type="image/png"))
         if ref_analysis:
             prompt.append(Part(text=f"\n### REFERENCE DATA\n{json.dumps(ref_analysis)}\n"))
         
-        # --- Phase 2: Execution ---
+        # --- Phase 2: Execution with Exploration Enforcement ---
         history = None
         generated_code = None
+        exploration_count = 0
+        confidence = 0
+        MIN_EXPLORATIONS = 1  # Require at least 1 exploration before generating
         
         for depth in range(self.MAX_EXPLORATION_DEPTH):
             
@@ -470,20 +511,26 @@ class WorkerAgent:
                 return TaskResult(task_id, filename, False, error=str(e))
             if not response:
                 logger.warning(f"API error, No Response")
-                break    
+                break
+            
+            # Track tokens
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                total_prompt_tokens += getattr(response.usage_metadata, 'prompt_token_count', 0)
+                total_output_tokens += getattr(response.usage_metadata, 'candidates_token_count', 0)
+                
             if history is None:
                 history = self._init_history(prompt, response)
-            elif  response.candidates:
+            elif response.candidates:
                 history.append(response.candidates[0].content)
             
             if not response.function_calls:
-                # Check for code block in text
-                if response.text and "```" in response.text:
+                # Check for code block in text (fallback)
+                if response.text and "```" in response.text and exploration_count >= MIN_EXPLORATIONS:
                     generated_code = self._extract_code_from_text(response.text)
                     if generated_code: break
                 
                 # If no tools and no code, and we are deep, break
-                if depth > 1: break
+                if depth > 2: break
                 continue
 
             # Handle Tools
@@ -496,26 +543,65 @@ class WorkerAgent:
                 
                 if fname == "generate_code":
                     code = args.get("code", "")
-                    if len(code) > 20:
+                    confidence = args.get("confidence", 5)
+                    
+                    # ENFORCE: Reject if no exploration done
+                    if exploration_count < MIN_EXPLORATIONS:
+                        tool_outputs.append(types.Part.from_function_response(
+                            name=fname, 
+                            response={
+                                "error": "REJECTED: You MUST explore at least one reference family before generating code. Call explore_reference() first with families from the Reference Analysis neighbors.",
+                                "exploration_count": exploration_count,
+                                "required": MIN_EXPLORATIONS
+                            }
+                        ))
+                        logger.info(f"   ⚠️ Rejected premature generate_code (explorations: {exploration_count})")
+                    elif len(code) > 20:
                         generated_code = code
-                        tool_outputs.append(types.Part.from_function_response(name=fname, response={"status": "saved"}))
+                        tool_outputs.append(types.Part.from_function_response(
+                            name=fname, 
+                            response={"status": "saved", "confidence": confidence}
+                        ))
+                        logger.info(f"   ✅ Code generated (confidence: {confidence}/10, explorations: {exploration_count})")
                         should_break = True
                 
                 elif fname == "explore_reference":
                     families = args.get("families", [])
-                    # Safety check: If agent tries to explore but gives no valid families
                     if not families:
-                        tool_outputs.append(types.Part.from_function_response(name=fname, response={"error": "No valid families provided. Generate code now."}))
+                        tool_outputs.append(types.Part.from_function_response(
+                            name=fname, 
+                            response={"error": "No families provided. Check the Reference Analysis 'neighbors' field for family names to explore."}
+                        ))
                     else:
                         stitched, results = self.decoder.bulk_inspect(families)
-                        logger.info(f"Results: {results}")
+                        exploration_count += 1
+                        logger.info(f"   🔍 Exploration {exploration_count}: {len(families)} families → {len(results)} found")
+                        
                         if not results:
-                            # CRITICAL FIX: If exploration yields nothing, force code generation next turn
-                            tool_outputs.append(types.Part.from_function_response(name=fname, response={"error": "Families not found in Atlas. Proceed to generate code with best effort."}))
+                            tool_outputs.append(types.Part.from_function_response(
+                                name=fname, 
+                                response={
+                                    "warning": "Families not found in Atlas. Try different family names from the Reference Analysis.",
+                                    "explored": exploration_count
+                                }
+                            ))
                         else:
-                            tool_outputs.append(types.Part.from_function_response(name=fname, response={"found": len(results)}))
+                            # Provide rich analysis back
+                            analysis = [{"family": r.family, "props": r.props[:5], "neighbors": r.neighbors[:5]} for r in results]
+                            tool_outputs.append(types.Part.from_function_response(
+                                name=fname, 
+                                response={
+                                    "found": len(results),
+                                    "analysis": analysis,
+                                    "explored": exploration_count,
+                                    "can_generate": exploration_count >= MIN_EXPLORATIONS
+                                }
+                            ))
                             if stitched:
-                                history.append(types.Content(role="user", parts=[types.Part.from_bytes(data=stitched, mime_type="image/png")]))
+                                history.append(types.Content(role="user", parts=[
+                                    types.Part(text=f"Visual reference from exploration {exploration_count}:"),
+                                    types.Part.from_bytes(data=stitched, mime_type="image/png")
+                                ]))
 
             if should_break:
                 break
@@ -523,10 +609,24 @@ class WorkerAgent:
             history.append(types.Content(role="tool", parts=tool_outputs))
 
         if generated_code:
-            path = self._save_code(filename, generated_code)
-            return TaskResult(task_id, filename, True, code=generated_code, code_path=path)
+            logger.info(f"   📊 Tokens: {total_prompt_tokens:,} prompt + {total_output_tokens:,} output = {total_prompt_tokens + total_output_tokens:,} total")
+            return TaskResult(
+                task_id, filename, True, 
+                code=generated_code, 
+                description=task.get('description', ''), 
+                explorations=exploration_count,
+                prompt_tokens=total_prompt_tokens,
+                output_tokens=total_output_tokens,
+                total_tokens=total_prompt_tokens + total_output_tokens
+            )
         
-        return TaskResult(task_id, filename, False, error="No code generated")
+        return TaskResult(
+            task_id, filename, False, 
+            error=f"No code generated after {exploration_count} explorations",
+            prompt_tokens=total_prompt_tokens,
+            output_tokens=total_output_tokens,
+            total_tokens=total_prompt_tokens + total_output_tokens
+        )
 
     def _get_reference(self, reference: str):
         if not reference: return None, {}
@@ -539,9 +639,13 @@ class WorkerAgent:
         return None, {}
 
     def _call_api(self, content):
-        # Worker tools
-        def generate_code(code: str) -> dict: return {}
-        def explore_reference(families: list[str]) -> dict: return {}
+        # Worker tools with confidence tracking
+        def generate_code(code: str, confidence: int = 5) -> dict: 
+            """Generate code for the target file. Confidence is 1-10 where 10 means 100% confident."""
+            return {}
+        def explore_reference(families: list[str]) -> dict: 
+            """Explore reference families to understand patterns before generating code."""
+            return {}
         
         config = types.GenerateContentConfig(
             tools=[generate_code, explore_reference],
@@ -572,12 +676,6 @@ class WorkerAgent:
         match = re.search(r'```(?:tsx?|jsx?|typescript)?\n(.*?)```', text, re.DOTALL)
         return match.group(1) if match else None
 
-    def _save_code(self, filename, code):
-        safe_name = filename.replace("/", "_").replace("\\", "_")
-        if not safe_name.endswith((".tsx", ".ts")): safe_name += ".tsx"
-        path = os.path.join(self.code_dir, safe_name)
-        with open(path, 'w', encoding='utf-8') as f: f.write(code)
-        return path
 
 
 class VisualRAGPipeline:
@@ -586,12 +684,13 @@ class VisualRAGPipeline:
     Production-level implementation with result tracking.
     """
     
-    def __init__(self):
-        self.api_key = "AIzaSyCuge0jQnDpHgrSyDwPaWNBvr5R7bm__CI"
+    def __init__(self, tiles_dir: str):
+        self.tiles_dir = tiles_dir
+        self.api_key = "AIzaSyBvvlaZaKCY9RWYwOa_f1jlOJkO0p6mV2Q"
         self.client = genai.Client(api_key=self.api_key)
-        self.decoder = workflow.VisualDecoder()
-        self.vocab_index = workflow.VocabularyIndex()
-        self.orchestrator = OrchestratorAgent()
+        self.decoder = workflow.VisualDecoder(tiles_dir)
+        self.vocab_index = workflow.VocabularyIndex(tiles_dir)
+        self.orchestrator = OrchestratorAgent(tiles_dir)
         self.results: List[TaskResult] = []
     
     def run(self, query: str):
@@ -624,7 +723,8 @@ class VisualRAGPipeline:
             client=self.client,
             decoder=self.decoder,
             vocab_index=self.vocab_index,
-            output_dir=self.orchestrator.output_dir
+            output_dir=self.orchestrator.output_dir,
+            legend_path=self.decoder.get_legend_path()
         )
         
         for i, task in enumerate(tasks):
@@ -633,7 +733,7 @@ class VisualRAGPipeline:
             self.results.append(result)
             
             if result.success:
-                logger.info(f"   ✅ SUCCESS: {result.code_path}")
+                logger.info(f"   ✅ SUCCESS: {result.filename}")
             else:
                 logger.warning(f"   ❌ FAILED: {result.error}")
             
@@ -647,8 +747,8 @@ class VisualRAGPipeline:
         logger.info(f"   Success: {successful}/{len(self.results)} tasks")
         logger.info("=" * 60)
         
-        # Save summary
-        self._save_summary()
+        # Save cookbook
+        self._save_cookbook()
     
     def _extract_tasks_from_plan(self, plan_path: str) -> List[Dict]:
         """Extract tasks from the markdown plan."""
@@ -688,39 +788,96 @@ class VisualRAGPipeline:
         
         return tasks
     
-    def _save_summary(self):
-        """Save execution summary as markdown."""
-        summary_path = os.path.join(self.orchestrator.gen_dir, "execution_summary.md")
+    def _save_cookbook(self):
+        """Save all generated code as a single cookbook markdown file."""
+        cookbook_path = os.path.join(self.orchestrator.gen_dir, "cookbook.md")
         
         lines = [
-            "# Execution Summary\n",
-            f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
-            f"**Output Directory:** `{self.orchestrator.output_dir}`\n\n",
-            "## Results\n\n",
-            "| Task | File | Status | Path |\n",
-            "|------|------|--------|------|\n",
+            "# Implementation Cookbook\n\n",
+            f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n",
+            "---\n\n",
         ]
         
-        for r in self.results:
-            status = "✅ Success" if r.success else f"❌ {r.error or 'Failed'}"
-            path = f"`{os.path.basename(r.code_path)}`" if r.code_path else "-"
-            lines.append(f"| {r.task_id} | `{r.filename}` | {status} | {path} |\n")
+        # Table of contents
+        lines.append("## Table of Contents\n\n")
+        for i, r in enumerate(self.results):
+            if r.success:
+                anchor = r.filename.replace("/", "_").replace("\\", "_").replace(".", "_")
+                lines.append(f"{i+1}. [{r.filename}](#{anchor})\n")
+        lines.append("\n---\n\n")
         
-        lines.append(f"\n## Statistics\n")
+        # Code sections
+        for r in self.results:
+            if r.success and r.code:
+                anchor = r.filename.replace("/", "_").replace("\\", "_").replace(".", "_")
+                ext = r.filename.split(".")[-1] if "." in r.filename else "tsx"
+                
+                lines.append(f"## {r.filename} {{#{anchor}}}\n\n")
+                if r.description:
+                    lines.append(f"**Description:** {r.description}\n\n")
+                lines.append(f"```{ext}\n{r.code}\n```\n\n")
+                lines.append("---\n\n")
+        
+        # Statistics
+        total_prompt = sum(r.prompt_tokens for r in self.results)
+        total_output = sum(r.output_tokens for r in self.results)
+        total_all = sum(r.total_tokens for r in self.results)
+        
+        lines.append("## Summary\n\n")
         lines.append(f"- **Total Tasks:** {len(self.results)}\n")
         lines.append(f"- **Successful:** {sum(1 for r in self.results if r.success)}\n")
         lines.append(f"- **Failed:** {sum(1 for r in self.results if not r.success)}\n")
-        lines.append(f"- **Total Explorations:** {sum(r.explorations for r in self.results)}\n")
+        lines.append(f"- **Total Explorations:** {sum(r.explorations for r in self.results)}\n\n")
         
-        with open(summary_path, 'w', encoding='utf-8') as f:
+        # Token usage table
+        lines.append("### Token Usage (Workers)\n\n")
+        lines.append("| Task | File | Prompt | Output | Total |\n")
+        lines.append("|------|------|--------|--------|-------|\n")
+        for r in self.results:
+            lines.append(f"| {r.task_id} | `{r.filename}` | {r.prompt_tokens:,} | {r.output_tokens:,} | {r.total_tokens:,} |\n")
+        lines.append(f"| **TOTAL** | | **{total_prompt:,}** | **{total_output:,}** | **{total_all:,}** |\n\n")
+        
+        if any(not r.success for r in self.results):
+            lines.append("### Failed Tasks\n\n")
+            for r in self.results:
+                if not r.success:
+                    lines.append(f"- `{r.filename}`: {r.error}\n")
+        
+        with open(cookbook_path, 'w', encoding='utf-8') as f:
             f.writelines(lines)
         
-        logger.info(f"📊 Summary saved: {summary_path}")
+        logger.info(f"📚 Cookbook saved: {cookbook_path}")
+        logger.info(f"📊 Worker Tokens: {total_prompt:,} prompt + {total_output:,} output = {total_all:,} total")
 
 
 if __name__ == "__main__":
-    # Run full pipeline
-    pipeline = VisualRAGPipeline()
-    pipeline.run("I want to Implement ANY MCP inside my blimpt app what are the steps & what i need to change")
-
-
+    parser = argparse.ArgumentParser(
+        description="Visual RAG Agent - Analyze codebase and generate implementation plans.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python agent.py --tiles ./repo_blimpt_tiles --query "Add user authentication"
+  python agent.py -t ./my_project_tiles -q "Implement MCP integration"
+"""
+    )
+    parser.add_argument(
+        "--tiles", "-t",
+        required=True,
+        help="Path to the tiles directory (e.g., repo_name_tiles/)"
+    )
+    parser.add_argument(
+        "--query", "-q",
+        required=True,
+        help="The implementation query/request"
+    )
+    
+    args = parser.parse_args()
+    
+    # Validate tiles directory
+    if not os.path.isdir(args.tiles):
+        print(f"Error: Tiles directory not found: {args.tiles}")
+        exit(1)
+    
+    # Run pipeline
+    pipeline = VisualRAGPipeline(args.tiles)
+    pipeline.run(args.query)

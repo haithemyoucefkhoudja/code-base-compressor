@@ -48,7 +48,7 @@ def test_extract_usages_from_file(mock_fs):
     with open(file_path, 'rb') as f:
         source_code = f.read()
         
-    calls, jsxs, cdefs, _ = extract_usages(file_path, source_code)
+    calls, jsxs, cdefs, _, _, _ = extract_usages(file_path, source_code)
     for call in calls:
         print(call.chain)
     # Test Calls
@@ -77,7 +77,7 @@ def test_extract_component_definition(mock_fs):
     with open(file_path, 'rb') as f:
         source_code = f.read()
 
-    _, _, cdefs, _ = extract_usages(file_path, source_code)
+    _, _, cdefs, _, _, _ = extract_usages(file_path, source_code)
     
     # `Button` and `HelperComponent` should be detected
     assert len(cdefs) == 2

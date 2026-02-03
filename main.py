@@ -142,6 +142,13 @@ def main():
         "unique_references": len(cleaned_references),
     }
 
+    # Filter definitions based on presence in cleaned patterns
+    active_patterns = set()
+    for c in cleaned_calls: active_patterns.add(c['chain'])
+    for j in cleaned_jsx: active_patterns.add(j['component'])
+    for k in cleaned_constants: active_patterns.add(k['constant'])
+    for r in cleaned_references: active_patterns.add(r['name'])
+
     final_output = {
         "summary": summary,
         "vocabulary": raw_vocab,
@@ -153,23 +160,43 @@ def main():
         
     }
     for c in cleaned_components:
-        if c.name not in raw_vocab:
+        if c.name == 'ChatProvider':
+            print("c.code", c.abstract_forms)
+            print(c.name in active_patterns)
+        if c.name not in active_patterns:
             final_output["component_definitions"].append({
                 "component": c.name,
                 "file": os.path.relpath(c.file, target_repo_path),
                 "abstract_forms": c.abstract_forms,
-                "props":c.props
+                "props": c.props,
+                "prop_types": c.prop_types,
+                "return_type": c.return_type
             })
     print("Processing references...")
     
     
+    # Process Type Definitions
+    cleaned_types = []
+    seen_types = set()
+    for t in all_type_defs:
+        key = (t.name, t.file)
+        if key not in seen_types:
+            cleaned_types.append({
+                "name": t.name,
+                "file": os.path.relpath(t.file, target_repo_path),
+                "code": t.code
+            })
+            seen_types.add(key)
+
     with open(output_file_path, "w", encoding='utf-8') as f:
+        final_output["type_definitions"] = cleaned_types
         json.dump(final_output, f, indent=2)
 
     print("=" * 80)
     print("Successfully cleaned and processed patterns.")
     print(f"Call patterns reduced to {len(cleaned_calls)}")
     print(f"JSX patterns reduced to {len(cleaned_jsx)}")
+
     print(f"Constant patterns reduced to {len(cleaned_constants)}")
     print(f"Reference patterns reduced to {len(cleaned_references)}")
     print(f"Exported to {output_file_path}")

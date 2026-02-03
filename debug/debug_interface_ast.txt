@@ -1,0 +1,432 @@
+--- Interface AST Structure ---
+
+
+=== Interface: ChatContextValue ===
+  interface = 'interface'
+  type_identifier = 'ChatContextValue'
+  interface_body
+    { = '{'
+    property_signature
+      property_identifier = 'messages'
+      type_annotation
+        : = ':'
+        array_type
+          type_identifier = 'Message'
+          [ = '['
+          ] = ']'
+    ; = ';'
+    property_signature
+      property_identifier = 'pinnedMessage'
+      type_annotation
+        : = ':'
+        union_type
+          type_identifier = 'HiddenMessage'
+          | = '|'
+          literal_type
+            null = 'null'
+    ; = ';'
+    property_signature
+      property_identifier = 'lastMessage'
+      type_annotation
+        : = ':'
+        union_type
+          type_identifier = 'HiddenMessage'
+          | = '|'
+          literal_type
+            null = 'null'
+    ; = ';'
+    property_signature
+      property_identifier = 'isLoading'
+      type_annotation
+        : = ':'
+        object_type
+          { = '{'
+          property_signature
+            property_identifier = 'state'
+            type_annotation
+              : = ':'
+              predefined_type
+                boolean = 'boolean'
+          ; = ';'
+          property_signature
+            property_identifier = 'id'
+            type_annotation
+              : = ':'
+              union_type
+                predefined_type
+                  string = 'string'
+                | = '|'
+                literal_type
+                  null = 'null'
+          ; = ';'
+          } = '}'
+    ; = ';'
+    property_signature
+      property_identifier = 'error'
+      type_annotation
+        : = ':'
+        union_type
+          predefined_type
+            string = 'string'
+          | = '|'
+          literal_type
+            null = 'null'
+    ; = ';'
+    property_signature
+      property_identifier = 'conversation'
+      type_annotation
+        : = ':'
+        union_type
+          type_identifier = 'Conversation'
+          | = '|'
+          literal_type
+            null = 'null'
+    ; = ';'
+    property_signature
+      property_identifier = 'stopRef'
+      type_annotation
+        : = ':'
+        generic_type
+          nested_type_identifier
+            identifier = 'React'
+            . = '.'
+            type_identifier = 'MutableRefObject'
+          type_arguments
+            < = '<'
+            predefined_type
+              boolean = 'boolean'
+            > = '>'
+    ; = ';'
+    property_signature
+      property_identifier = 'stop'
+      type_annotation
+        : = ':'
+        predefined_type
+          boolean = 'boolean'
+    ; = ';'
+    property_signature
+      property_identifier = 'setStop'
+      type_annotation
+        : = ':'
+        generic_type
+          nested_type_identifier
+            identifier = 'React'
+            . = '.'
+            type_identifier = 'Dispatch'
+          type_arguments
+            < = '<'
+            generic_type
+              nested_type_identifier
+                identifier = 'React'
+                . = '.'
+                type_identifier = 'SetStateAction'
+              type_arguments
+                < = '<'
+                predefined_type
+                  boolean = 'boolean'
+                > = '>'
+            > = '>'
+    ; = ';'
+    property_signature
+      property_identifier = 'setMessages'
+      type_annotation
+        : = ':'
+        generic_type
+          nested_type_identifier
+            identifier = 'React'
+            . = '.'
+            type_identifier = 'Dispatch'
+          type_arguments
+            < = '<'
+            generic_type
+              nested_type_identifier
+                identifier = 'React'
+                . = '.'
+                type_identifier = 'SetStateAction'
+              type_arguments
+                < = '<'
+                array_type
+                  type_identifier = 'Message'
+                  [ = '['
+                  ] = ']'
+                > = '>'
+            > = '>'
+    ; = ';'
+    property_signature
+      property_identifier = 'setConversation'
+      type_annotation
+        : = ':'
+        generic_type
+          nested_type_identifier
+            identifier = 'React'
+            . = '.'
+            type_identifier = 'Dispatch'
+          type_arguments
+            < = '<'
+            generic_type
+              nested_type_identifier
+                identifier = 'React'
+                . = '.'
+                type_identifier = 'SetStateAction'
+              type_arguments
+                < = '<'
+                union_type
+                  type_identifier = 'Conversation'
+                  | = '|'
+                  literal_type
+                    null = 'null'
+                > = '>'
+            > = '>'
+    ; = ';'
+    property_signature
+      property_identifier = 'setLastMessage'
+      type_annotation
+        : = ':'
+        generic_type
+          nested_type_identifier
+            identifier = 'React'
+            . = '.'
+            type_identifier = 'Dispatch'
+          type_arguments
+            < = '<'
+            generic_type
+              nested_type_identifier
+                identifier = 'React'
+                . = '.'
+                type_identifier = 'SetStateAction'
+              type_arguments
+                < = '<'
+                union_type
+                  type_identifier = 'HiddenMessage'
+                  | = '|'
+                  literal_type
+                    null = 'null'
+                > = '>'
+            > = '>'
+    ; = ';'
+    property_signature
+      property_identifier = 'setPinnedMessage'
+      type_annotation
+        : = ':'
+        generic_type
+          nested_type_identifier
+            identifier = 'React'
+            . = '.'
+            type_identifier = 'Dispatch'
+          type_arguments
+            < = '<'
+            generic_type
+              nested_type_identifier
+                identifier = 'React'
+                . = '.'
+                type_identifier = 'SetStateAction'
+              type_arguments
+                < = '<'
+                union_type
+                  type_identifier = 'HiddenMessage'
+                  | = '|'
+                  literal_type
+                    null = 'null'
+                > = '>'
+            > = '>'
+    ; = ';'
+    property_signature
+      property_identifier = 'closeLastMessage'
+      type_annotation
+        : = ':'
+        function_type
+          formal_parameters
+            ( = '('
+            ) = ')'
+          => = '=>'
+          predefined_type
+            void = 'void'
+    ; = ';'
+    property_signature
+      property_identifier = 'toggleLastMessage'
+      type_annotation
+        : = ':'
+        function_type
+          formal_parameters
+            ( = '('
+            ) = ')'
+          => = '=>'
+          predefined_type
+            void = 'void'
+    ; = ';'
+    property_signature
+      property_identifier = 'closePinnedMessage'
+      type_annotation
+        : = ':'
+        function_type
+          formal_parameters
+            ( = '('
+            ) = ')'
+          => = '=>'
+          predefined_type
+            void = 'void'
+    ; = ';'
+    property_signature
+      property_identifier = 'togglePinnedMessage'
+      type_annotation
+        : = ':'
+        function_type
+          formal_parameters
+            ( = '('
+            ) = ')'
+          => = '=>'
+          predefined_type
+            void = 'void'
+    ; = ';'
+    property_signature
+      property_identifier = 'setError'
+      type_annotation
+        : = ':'
+        generic_type
+          nested_type_identifier
+            identifier = 'React'
+            . = '.'
+            type_identifier = 'Dispatch'
+          type_arguments
+            < = '<'
+            generic_type
+              nested_type_identifier
+                identifier = 'React'
+                . = '.'
+                type_identifier = 'SetStateAction'
+              type_arguments
+                < = '<'
+                union_type
+                  predefined_type
+                    string = 'string'
+                  | = '|'
+                  literal_type
+                    null = 'null'
+                > = '>'
+            > = '>'
+    ; = ';'
+    property_signature
+      property_identifier = 'pinMessage'
+      type_annotation
+        : = ':'
+        function_type
+          formal_parameters
+            ( = '('
+            required_parameter
+              identifier = 'messageId'
+              type_annotation
+                : = ':'
+                predefined_type
+                  string = 'string'
+            ) = ')'
+          => = '=>'
+          predefined_type
+            void = 'void'
+    ; = ';'
+    property_signature
+      property_identifier = 'rewrite'
+      type_annotation
+        : = ':'
+        function_type
+          formal_parameters
+            ( = '('
+            required_parameter
+              identifier = 'messageId'
+              type_annotation
+                : = ':'
+                predefined_type
+                  string = 'string'
+            , = ','
+            required_parameter
+              identifier = 'searchMode'
+              type_annotation
+                : = ':'
+                predefined_type
+                  string = 'string'
+            , = ','
+            required_parameter
+              identifier = 'emptyInput'
+              type_annotation
+                : = ':'
+                function_type
+                  formal_parameters
+                    ( = '('
+                    ) = ')'
+                  => = '=>'
+                  predefined_type
+                    void = 'void'
+            ) = ')'
+          => = '=>'
+          predefined_type
+            void = 'void'
+    ; = ';'
+    property_signature
+      property_identifier = 'newChatStarter'
+      type_annotation
+        : = ':'
+        function_type
+          formal_parameters
+            ( = '('
+            required_parameter
+              identifier = 'emptyInput'
+              type_annotation
+                : = ':'
+                function_type
+                  formal_parameters
+                    ( = '('
+                    ) = ')'
+                  => = '=>'
+                  predefined_type
+                    void = 'void'
+            ) = ')'
+          => = '=>'
+          predefined_type
+            void = 'void'
+    ; = ';'
+    property_signature
+      property_identifier = 'handleFormSubmit'
+      type_annotation
+        : = ':'
+        function_type
+          formal_parameters
+            ( = '('
+            required_parameter
+              identifier = 'query'
+              type_annotation
+                : = ':'
+                predefined_type
+                  string = 'string'
+            , = ','
+            required_parameter
+              identifier = 'attachments'
+              type_annotation
+                : = ':'
+                array_type
+                  type_identifier = 'TAttachment'
+                  [ = '['
+                  ] = ']'
+            , = ','
+            required_parameter
+              identifier = 'searchMode'
+              type_annotation
+                : = ':'
+                predefined_type
+                  string = 'string'
+            , = ','
+            required_parameter
+              identifier = 'emptyInput'
+              type_annotation
+                : = ':'
+                function_type
+                  formal_parameters
+                    ( = '('
+                    ) = ')'
+                  => = '=>'
+                  predefined_type
+                    void = 'void'
+            ) = ')'
+          => = '=>'
+          predefined_type
+            void = 'void'
+    ; = ';'
+    } = '}'

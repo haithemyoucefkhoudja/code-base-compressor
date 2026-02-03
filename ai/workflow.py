@@ -7,17 +7,14 @@ Provides the visual inspection and composition capabilities for the Agent.
 import os
 import json
 import hashlib
+import glob
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 import io
 
-# Configuration Constants
-ATLAS_PATH = r"c:\\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.png"
-COORDS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.coords.json"
-MAP_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.map.json"
-VOCAB_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns_tiles.vocab.json"
-PATTERNS_PATH = r"c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt_patterns.json"
+# Default Configuration (can be overridden via constructor)
+DEFAULT_TILES_DIR = None  # Must be set explicitly
 FONT_PATH = "arial.ttf"
 
 # --- Helper: Color Logic ---
@@ -58,9 +55,38 @@ class InspectionResult:
 # --- Tool 1: Visual Decoder (The Eyes) ---
 
 class VisualDecoder:
-    def __init__(self, atlas_path: str = ATLAS_PATH, coords_path: str = COORDS_PATH, map_path: str = MAP_PATH, repo_patterns_path:str=PATTERNS_PATH):
-        with open(repo_patterns_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    def __init__(self, tiles_dir: str):
+        """
+        Initialize VisualDecoder from a tiles directory.
+        
+        Expected directory structure:
+        tiles_dir/
+            tiles.png OR tiles_1.png, tiles_2.png, ...
+            tiles.coords.json
+            tiles.vocab.json
+            map.json
+        
+        Also requires patterns.json in parent directory.
+        """
+        self.tiles_dir = tiles_dir
+        
+        # Discover paths
+        self.atlas_paths = self._discover_tile_images()
+        self.coords_path = os.path.join(tiles_dir, "tiles.coords.json")
+        self.map_path = os.path.join(tiles_dir, "map.json")
+        self.vocab_path = os.path.join(tiles_dir, "tiles.vocab.json")
+        
+        # Patterns file is in parent directory with repo name
+        parent_dir = os.path.dirname(tiles_dir)
+        repo_name = os.path.basename(tiles_dir).replace("_tiles", "")
+        self.patterns_path = os.path.join(parent_dir, f"{repo_name}_patterns.json")
+        
+        # Load patterns registry
+        if os.path.exists(self.patterns_path):
+            with open(self.patterns_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {}
     
         registry = {}
     
@@ -68,28 +94,73 @@ class VisualDecoder:
             if not name: return
             if not src: src = "unknown"
             key = f"{src}::{name}"
-            registry[key] = {"name": name, "source": src, "type": kind, "props":props}
+            registry[key] = {"name": name, "source": src, "type": kind, "props": props}
             
         for p in data.get("call_patterns", []): register(p.get("chain"), p.get("source_import"), "call", [])
-        for p in data.get("jsx_patterns", []): register(p.get("component"), p.get("source_import"), "jsx",p.get("common_props"))
-        for p in data.get("constant_patterns", []): register(p.get("constant"), p.get("source_import"), "const",[])
-        for p in data.get("component_definitions", []): register(p.get("component"), p.get("file"), "def",p.get("props"))
-        for p in data.get("reference_patterns", []): register(p.get("name"), p.get("source_import"), "ref",[])
+        for p in data.get("jsx_patterns", []): register(p.get("component"), p.get("source_import"), "jsx", p.get("common_props"))
+        for p in data.get("constant_patterns", []): register(p.get("constant"), p.get("source_import"), "const", [])
+        for p in data.get("component_definitions", []): register(p.get("component"), p.get("file"), "def", p.get("props"))
+        for p in data.get("reference_patterns", []): register(p.get("name"), p.get("source_import"), "ref", [])
         self.registry = registry
-        self.atlas_path = atlas_path
-        self.coords_path = coords_path
-        self.map_path = map_path
+        
         self.context = self._initialize_context()
+    
+    def _discover_tile_images(self) -> List[str]:
+        """Find all tile images in the directory."""
+        # Check for single tile
+        single_tile = os.path.join(self.tiles_dir, "tiles.png")
+        if os.path.exists(single_tile):
+            return [single_tile]
+        
+        # Check for numbered tiles
+        pattern = os.path.join(self.tiles_dir, "tiles_*.png")
+        tiles = sorted(glob.glob(pattern))
+        
+        if not tiles:
+            raise FileNotFoundError(f"No tile images found in {self.tiles_dir}")
+        
+        return tiles
+    
+    def get_legend_path(self) -> str:
+        """Return path to the legend image."""
+        return os.path.join(self.tiles_dir, "tiles_legend.png")
         
     def _initialize_context(self) -> VisualContext:
         print("👁️ VisualDecoder: Loading Atlas and calibrating palette...")
-        if not os.path.exists(self.atlas_path): 
-            raise FileNotFoundError(self.atlas_path)
-        img = Image.open(self.atlas_path).convert("RGB")
+        
+        # Load and stitch all tile images
+        tile_images = []
+        for tile_path in self.atlas_paths:
+            if not os.path.exists(tile_path): 
+                raise FileNotFoundError(tile_path)
+            tile_images.append(Image.open(tile_path).convert("RGB"))
+        
+        # Stitch tiles vertically (they were split by height)
+        if len(tile_images) == 1:
+            img = tile_images[0]
+        else:
+            total_width = tile_images[0].width
+            total_height = sum(t.height for t in tile_images)
+            img = Image.new("RGB", (total_width, total_height))
+            y_offset = 0
+            for tile in tile_images:
+                img.paste(tile, (0, y_offset))
+                y_offset += tile.height
+            print(f"   Stitched {len(tile_images)} tiles -> {total_width}x{total_height}")
         
         with open(self.coords_path, 'r') as f:
             coords_list = json.load(f)
-            coords_map = {item["family"]: item for item in coords_list}
+            # Handle coords that may have tile_index (for split images)
+            # Reconstruct original y coordinates
+            coords_map = {}
+            for item in coords_list:
+                family = item["family"]
+                if family in coords_map:
+                    continue  # Skip duplicates from split tiles
+                # If tile_index present, use original_y if available
+                if "original_y" in item:
+                    item["bbox"][1] = item["original_y"]
+                coords_map[family] = item
             
         with open(self.map_path, 'r') as f:
             family_keys = list(json.load(f).keys())
@@ -340,18 +411,18 @@ class Composer:
         total_h = current_y + row_h + PAD
         total_w = max(total_w + 200, 1024)
 
-        canvas = Image.new("RGB", (total_w, total_h), (40, 44, 52))
+        canvas = Image.new("RGB", (total_w, total_h),0)
         draw = ImageDraw.Draw(canvas)
         
-        try: 
-            font = ImageFont.truetype(FONT_PATH, 20)
-        except: 
-            font = ImageFont.load_default()
+        # try: 
+        #     font = ImageFont.truetype(FONT_PATH, 20)
+        # except: 
+        #     font = ImageFont.load_default()
 
         for img, x, y, label in positions:
             draw.rectangle([x-2, y-2, x+img.width+2, y+img.height+2], fill=(20,20,20))
             canvas.paste(img, (x, y))
-            draw.text((x, y - 25), label, fill=(200, 200, 200), font=font)
+            # draw.text((x, y - 25), label, fill=(200, 200, 200), font=font)
             
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         canvas.save(output_path)
@@ -363,7 +434,8 @@ class Composer:
 class VocabularyIndex:
     """Searchable vocabulary from the codebase."""
     
-    def __init__(self, vocab_path: str = VOCAB_PATH, repo_patterns_path:str=PATTERNS_PATH):
+    def __init__(self, tiles_dir: str):
+        vocab_path = os.path.join(tiles_dir, "tiles.vocab.json")
         
         with open(vocab_path, 'r') as f:
             raw = json.load(f)

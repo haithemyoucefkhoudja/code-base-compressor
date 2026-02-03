@@ -1,0 +1,19 @@
+--- Debugging Call Argument Type Enrichment ---
+
+Step 1: Parsing chat-provider.d.ts
+Found 23 definitions
+
+Functions with parameters:
+  pinMessage: params=['string'], ret=void
+  rewrite: params=['string', 'string', '() => void'], ret=void
+  newChatStarter: params=['() => void'], ret=void
+  handleFormSubmit: params=['string', 'TAttachment[]', 'string', '() => void'], ret=void
+  handleFileChange: params=['React.ChangeEvent<HTMLInputElement>'], ret=void
+  addAttachment: params=['TAttachment'], ret=void
+  removeAttachment: params=['string'], ret=void
+  updateDockerMessage: params=['string'], ret=void
+
+Step 2: Looking for handleFormSubmit
+SUCCESS: Found handleFormSubmit
+  Parameters: ['string', 'TAttachment[]', 'string', '() => void']
+  Return Type: void

@@ -30,7 +30,8 @@ class TileConfig:
     pad_family: str = "PAD"           
     sep_family: str = "SEP"           
     background: Tuple[int, int, int] = (30, 30, 30) 
-    use_checksum_corner: bool = True  
+    use_checksum_corner: bool = True
+    max_dimension: int = 10000  # Max width/height before splitting
 
 # ----------------------------
 # 2) Deterministic glyph generator
@@ -262,8 +263,8 @@ def encode_rows_to_image(
 
     if not blocks: return {}
 
-    # 4. Shelf Packing
-    target_width = max(global_max_width, 4096) 
+    # 4. Shelf Packing - Cap width at max_dimension
+    target_width = min(max(global_max_width, 4096), cfg.max_dimension)
     
     current_shelf_x = 0
     current_shelf_h = 0
@@ -297,36 +298,91 @@ def encode_rows_to_image(
         placed_items.append(item)
     current_y += current_shelf_h
     
-    # 5. Render Final Canvas
+    # 5. Render Final Canvas (with possible splitting)
     final_w = target_width
     final_h = current_y
     
     print(f"Canvas Size: {final_w}x{final_h} pixels")
-    canvas = Image.new("RGB", (final_w, final_h), cfg.background)
     
-    coords = []
+    # Determine if we need to split
+    max_dim = cfg.max_dimension
+    need_split = final_w > max_dim or final_h > max_dim
     
-    for img, x, y, meta in placed_items:
-        canvas.paste(img, (x, y))
+    all_coords = []
+    saved_images = []
+    
+    if not need_split:
+        # Single image output
+        canvas = Image.new("RGB", (final_w, final_h), cfg.background)
+        for img, x, y, meta in placed_items:
+            canvas.paste(img, (x, y))
+            bbox = [x, y, meta['w'], meta['h']]
+            all_coords.append({
+                "family": meta['family'],
+                "bbox": bbox,
+                "rows": meta['rows'],
+                "limit": meta['limit'],
+                "tile_index": 0
+            })
+        canvas.save(out_png_path, optimize=True)
+        saved_images.append(out_png_path)
+    else:
+        # Split into multiple tiles based on height
+        tile_height = max_dim
+        num_tiles = math.ceil(final_h / tile_height)
+        print(f"Splitting into {num_tiles} tiles (max dimension: {max_dim}px)")
         
-        bbox = [x, y, meta['w'], meta['h']]
-        coords.append({
-            "family": meta['family'],
-            "bbox": bbox,
-            "rows": meta['rows'],
-            "limit": meta['limit']
-        })
+        base_name = out_png_path.replace(".png", "")
         
-    canvas.save(out_png_path, optimize=True)
-    generate_legend(list(unique_families), out_png_path.replace(".png", "_legend.png"), cfg)
+        for tile_idx in range(num_tiles):
+            y_start = tile_idx * tile_height
+            y_end = min((tile_idx + 1) * tile_height, final_h)
+            tile_h = y_end - y_start
+            
+            tile_canvas = Image.new("RGB", (final_w, tile_h), cfg.background)
+            
+            for img, x, y, meta in placed_items:
+                item_y_end = y + meta['h']
+                
+                # Check if this item overlaps with current tile
+                if item_y_end > y_start and y < y_end:
+                    # Calculate overlap region
+                    paste_y = max(0, y - y_start)
+                    crop_top = max(0, y_start - y)
+                    crop_bottom = min(meta['h'], y_end - y)
+                    
+                    if crop_bottom > crop_top:
+                        cropped_img = img.crop((0, crop_top, meta['w'], crop_bottom))
+                        tile_canvas.paste(cropped_img, (x, paste_y))
+                        
+                        # Add coords for this tile (relative to tile)
+                        all_coords.append({
+                            "family": meta['family'],
+                            "bbox": [x, paste_y, meta['w'], crop_bottom - crop_top],
+                            "rows": meta['rows'],
+                            "limit": meta['limit'],
+                            "tile_index": tile_idx,
+                            "original_y": y
+                        })
+            
+            tile_path = f"{base_name}_{tile_idx + 1}.png"
+            tile_canvas.save(tile_path, optimize=True)
+            saved_images.append(tile_path)
+            print(f"  Saved: {tile_path} ({final_w}x{tile_h})")
     
+    # Generate legend
+    legend_path = out_png_path.replace(".png", "_legend.png")
+    generate_legend(list(unique_families), legend_path, cfg)
+    
+    # Save vocab
     with open(out_png_path.replace(".png", ".vocab.json"), "w", encoding="utf-8") as f:
-        json.dump([c['family'] for c in coords], f, indent=2)
+        json.dump(list(set(c['family'] for c in all_coords)), f, indent=2)
 
+    # Save coords
     with open(out_png_path.replace(".png", ".coords.json"), "w", encoding="utf-8") as f:
-        json.dump(coords, f, indent=2)
+        json.dump(all_coords, f, indent=2)
         
-    return {"dimensions": [final_w, final_h]}
+    return {"dimensions": [final_w, final_h], "tiles": len(saved_images), "images": saved_images}
 
 # ----------------------------
 # 4) Main Driver
@@ -364,7 +420,7 @@ if __name__ == "__main__":
     examples = []
     token_re = re.compile(r"[\w]+(?:\.[\w]+)*")
     
-    def resolve(t): return name_map.get(t, f"unknown::{t}")
+    def resolve(t): return name_map.get(t)
     
     def proc(plist, nkey, fkey):
         for p in plist:
@@ -378,7 +434,9 @@ if __name__ == "__main__":
                 tokens = token_re.findall(f)
                 row = [hkey]
                 for t in tokens:
-                    if t != hname: row.append(resolve(t))
+                    tok = resolve(t)
+                    if tok:
+                        if t != hname: row.append(tok)
                 if len(row) > 0: examples.append(row)
                 
     proc(data.get("call_patterns", []), "chain", "abstract_forms")
@@ -391,16 +449,25 @@ if __name__ == "__main__":
         if v['type'] == 'vocab' and k not in heads:
             examples.append([k, "PAD"])
             
-    # C. Output
-    base = os.path.splitext(input_path)[0]
-    out_png = f"{base}_tiles.png"
-    out_map = f"{base}_tiles.map.json"
-    out_vocab = f"{base}_vocab.json"
+    # C. Output - Create directory named after the repo
+    base = os.path.splitext(os.path.basename(input_path))[0]
+    # Remove _patterns suffix if present
+    if base.endswith("_patterns"):
+        repo_name = base[:-9]
+    else:
+        repo_name = base
+    
+    output_dir = os.path.join(os.path.dirname(input_path) or ".", f"{repo_name}_tiles")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    out_png = os.path.join(output_dir, "tiles.png")
+    out_map = os.path.join(output_dir, "map.json")
     
     cfg = TileConfig(tile_size=16)
-    encode_rows_to_image(examples, out_png, None, cfg)
+    result = encode_rows_to_image(examples, out_png, None, cfg)
     
     with open(out_map, "w", encoding="utf-8") as f:
         json.dump(registry, f, indent=2)
-        
+    
+    print(f"\nOutput directory: {output_dir}")
     print(f"Done. Map: {out_map}")

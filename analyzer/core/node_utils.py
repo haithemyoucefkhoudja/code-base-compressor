@@ -1,5 +1,5 @@
 
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 from tree_sitter import Node
 
 def import_name(import_name: str) -> Tuple[str, str]:
@@ -101,10 +101,14 @@ def get_full_chain(node: Node, source: bytes) -> str:
     return ".".join(parts) if parts else "<unknown>"
 
 def get_jsx_props(node: Node, source: bytes) -> List[str]:
-    """Extract all prop names from a JSX element."""
+    """Extract all prop names from a JSX element's opening tag only."""
     props = []
     
-    def find_props(n: Node):
+    def find_props(n: Node, depth: int = 0):
+        # Stop recursion into nested JSX elements (only extract from opening tag)
+        if depth > 0 and n.type in ("jsx_element", "jsx_self_closing_element"):
+            return
+            
         if n.type == "jsx_attribute":
             # First child is the prop name
             for child in n.children:
@@ -112,10 +116,63 @@ def get_jsx_props(node: Node, source: bytes) -> List[str]:
                     props.append(source[child.start_byte:child.end_byte].decode('utf-8'))
                     break
         for child in n.children:
-            find_props(child)
+            find_props(child, depth + 1)
     
     find_props(node)
     return props
+
+def get_jsx_props_with_types(node: Node, source: bytes) -> Dict[str, str]:
+    """Extract prop names and their inferred types from a JSX element."""
+    props_map = {}
+    
+    def infer_type_from_value(value_node: Node | None) -> str:
+        if not value_node: return "boolean" # True shorthand
+        
+        if value_node.type == "string":
+            return "string"
+        elif value_node.type == "jsx_expression":
+            # Check what's inside the expression
+            # usually children[1] is the expression content (children[0] is '{', children[-1] is '}')
+            if len(value_node.children) >= 2:
+                inner = value_node.children[1]
+                if inner.type == "string": return "string"
+                if inner.type == "number": return "number"
+                if inner.type in ("true", "false", "boolean"): return "boolean"
+                if inner.type == "object": return "object"
+                if inner.type in ("arrow_function", "function"): return "function"
+                if inner.type == "identifier": return "identifier"
+                if inner.type == "call_expression": return "call"
+            return "expression"
+        return "unknown"
+
+    def find_props(n: Node, depth: int = 0):
+        # Stop recursion into nested JSX elements (only extract from opening tag)
+        if depth > 0 and n.type in ("jsx_element", "jsx_self_closing_element"):
+            return
+            
+        if n.type == "jsx_attribute":
+            name = ""
+            for child in n.children:
+                if child.type in ("property_identifier", "identifier"):
+                    name = source[child.start_byte:child.end_byte].decode('utf-8')
+                    break
+            
+            if name:
+                value_node = n.child_by_field_name("value")
+                if not value_node:
+                    # Fallback: look for string or jsx_expression explicitly
+                    for child in n.children:
+                        if child.type in ("string", "jsx_expression", "number", "true", "false", "null"):
+                            value_node = child
+                            break
+                            
+                props_map[name] = infer_type_from_value(value_node)
+                
+        for child in n.children:
+            find_props(child, depth + 1)
+            
+    find_props(node)
+    return props_map
 
 def get_jsx_name(node: Node, source: bytes) -> str:
     """Extract JSX component name."""

@@ -1,8 +1,9 @@
 from typing import List, Dict, Any, Set
 from collections import defaultdict
+import json
 
 def clean_call_patterns(call_patterns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Merges call patterns based on their root and source import."""
+    """Merges call patterns based on their root (regardless of import path)."""
     grouped_calls = {}
     for item in call_patterns:
         chain = item['chain']
@@ -13,28 +14,76 @@ def clean_call_patterns(call_patterns: List[Dict[str, Any]]) -> List[Dict[str, A
         else:
             root = chain
 
-        key = (root, source_import)
+        # Group by ROOT ONLY (merge different import paths)
+        key = root
         if key not in grouped_calls:
             grouped_calls[key] = {
                 "chain": root,
-                "source_import": source_import,
+                "source_import": source_import,  # Primary import (first seen)
+                "source_imports": set(),  # All imports seen
                 "frequency": 0,
                 "files": set(),
                 "examples": [],
-                "sub_patterns": []
+                "sub_patterns": [],
+                "signature": None,  # Type signature from .d.ts
+                "call_variations": []  # Actual call patterns with their values
             }
+        
+        # Track all source imports
+        grouped_calls[key]["source_imports"].add(source_import)
         
         # Merge Data
         grouped_calls[key]["frequency"] += len(item["usages"])
         grouped_calls[key]["files"].update(u.file for u in item["usages"])
         grouped_calls[key]["examples"].extend(u.code for u in item["usages"])
         grouped_calls[key]["sub_patterns"].append(chain)
+        
+        for u in item["usages"]:
+            # Extract signature from first usage that has it
+            if u.dts_signature and grouped_calls[key]["signature"] is None:
+                grouped_calls[key]["signature"] = u.dts_signature
+            
+            # Construct call variation (actual values passed)
+            # u.prop_types is {0: type, 1: type} or {0: dict_of_props, ...}
+            if not u.prop_types:
+                sig = []
+            else:
+                max_idx = max([int(k) for k in u.prop_types.keys()] + [-1])
+                sig = []
+                for i in range(max_idx + 1):
+                    val = u.prop_types.get(str(i), "unknown")
+                    sig.append(val)  # val can be string or dict
+            
+            # Convert sig to JSON string for comparison (handles dicts)
+            sig_key = json.dumps(sig, sort_keys=True)
+            
+            # Add to call_variations
+            found = False
+            for var in grouped_calls[key]["call_variations"]:
+                var_key = json.dumps(var["args"], sort_keys=True)
+                if var_key == sig_key:
+                    var["count"] += 1
+                    found = True
+                    break
+            if not found:
+                grouped_calls[key]["call_variations"].append({ "args": sig, "count": 1 })
 
     # Reconstruct Call List
     cleaned_calls = []
     for key, details in grouped_calls.items():
         details["files"] = list(details["files"])
         details["examples"] = list(set(details["examples"]))
+        # Convert source_imports set to list and pick first as primary
+        source_imports = list(details["source_imports"])
+        if len(source_imports) > 1:
+            details["source_imports"] = source_imports
+        else:
+            del details["source_imports"]  # Remove if only one
+        # Sort call_variations by count
+        details["call_variations"].sort(key=lambda x: x["count"], reverse=True)
+        # Remove signature if None
+        if details["signature"] is None:
+            del details["signature"]
         cleaned_calls.append(details)
 
     cleaned_calls.sort(key=lambda x: x['frequency'], reverse=True)
@@ -79,7 +128,8 @@ def clean_jsx_patterns(jsx_patterns: List[Dict[str, Any]]) -> List[Dict[str, Any
                 "common_props": set(),
                 "files": set(),
                 "examples": [],
-                "sub_components": []
+                "sub_components": [],
+                "shapes": [] # List of { "props": {"prop": "type"}, "count": 1 }
             }
 
         grouped_jsx[key]["frequency"] += len(item["usages"])
@@ -87,12 +137,28 @@ def clean_jsx_patterns(jsx_patterns: List[Dict[str, Any]]) -> List[Dict[str, Any
         grouped_jsx[key]["files"].update(u.file for u in item["usages"])
         grouped_jsx[key]["examples"].extend(u.code for u in item["usages"])
         grouped_jsx[key]["sub_components"].append(comp_name)
+        
+        for u in item["usages"]:
+            # Shape for JSX is the prop_types map
+            # Sort keys to ensure stability
+            sig = u.prop_types # dict of prop -> type
+            
+            # Simple list-based check might fail with dicts, so we iterate
+            found = False
+            for shape in grouped_jsx[key]["shapes"]:
+                if shape["props"] == sig:
+                    shape["count"] += 1
+                    found = True
+                    break
+            if not found:
+                 grouped_jsx[key]["shapes"].append({ "props": sig, "count": 1 })
 
     cleaned_jsx = []
     for key, details in grouped_jsx.items():
         details["common_props"] = list(details["common_props"])
         details["files"] = list(details["files"])
         details["examples"] = list(set(details["examples"]))
+        details["shapes"].sort(key=lambda x: x["count"], reverse=True)
         cleaned_jsx.append(details)
 
     cleaned_jsx.sort(key=lambda x: x['frequency'], reverse=True)

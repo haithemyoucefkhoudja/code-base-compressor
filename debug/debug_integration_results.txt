@@ -1,0 +1,14 @@
+--- Debugging Extraction Integration ---
+Target File: c:\Users\haithem-yk\Desktop\Projects\reposoul-python-job\repo_blimpt\components\shortcut-ui\message-list.tsx
+Running extract_usages...
+
+Running extract_js_imports...
+Extracted Imports: {'"react"': ['DEFAULT:React', 'PART:useEffect', 'PART:useLayoutEffect', 'PART:useRef', 'PART:useCallback', 'PART:useMemo', 'PART:forwardRef', 'PART:createContext', 'PART:useContext', 'PART:useState', 'PART:useReducer', 'PART:useImperativeHandle'], '"@/types/Message"': ['PART:Message'], '"./message-box"': ['DEFAULT:MessageBox'], '"@/hooks/use-invert-scroll"': ['PART:useSmoothInvertedScroll'], '"@/providers/chat-provider"': ['PART:useChat']}
+
+Extracted 7 JSX usages.
+
+[MessageBox Usage]
+Line: 607
+Source Import: "./message-box"
+Prop Types: {'message': 'Message', 'messageIndex': 'number', 'rewrite': '(messageId: string, searchMode: string, emptyInput: () => void) => void', 'type': '"list" | "single"', 'isFixed': 'boolean'}
+SUCCESS: 'message' prop has type 'Message'
