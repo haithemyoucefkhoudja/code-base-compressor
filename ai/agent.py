@@ -5,17 +5,29 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from langgraph.graph.state import BaseModel
+from dotenv import load_dotenv
 
-try:
-    from langgraph.graph import StateGraph, START, END
-    from ai.utils.state import ResearchState
-    from ai.utils.nodes import Nodes
-    from ai.utils.llm import get_llm
-except ImportError:
-    raise ImportError("Dependencies missing. Install: langgraph langchain-openai pydantic pillow")
+load_dotenv()
+
+# try:
+    
+# except ImportError:
+#     raise ImportError("Dependencies missing. Install: langgraph langchain-openai pydantic pillow")
+
+from langgraph.graph import StateGraph, START, END
+from utils.state import ResearchState
+from utils.nodes import Nodes
+from utils.llm import get_llm
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+def should_continue(state: ResearchState):
+    """Decide whether to continue inspection or synthesize."""
+    pending = state.get("pending_targets", [])
+    if pending and len(pending) > 0:
+        return "continue"
+    return "done"
 
 def build_graph(tiles_dir: str, config: Optional[Dict] = None):
     """
@@ -26,6 +38,11 @@ def build_graph(tiles_dir: str, config: Optional[Dict] = None):
     # 1. Initialize LLM
     model_name = config.get("model_name") or "gpt-4o"
     provider = config.get("provider") or "openai"
+    
+    # Initialize Cost Tracker
+    from utils.cost import CostTracker
+    tracker = CostTracker()
+    tracker.set_model(model_name)
     
     logger.info(f"🤖 Initializing LLM: {provider}/{model_name}")
     
@@ -52,7 +69,17 @@ def build_graph(tiles_dir: str, config: Optional[Dict] = None):
     
     builder.add_edge(START, "planner")
     builder.add_edge("planner", "bulk_inspector")
-    builder.add_edge("bulk_inspector", "synthesizer")
+    
+    # Conditional Edge for Recursion
+    builder.add_conditional_edges(
+        "bulk_inspector",
+        should_continue,
+        {
+            "continue": "bulk_inspector", 
+            "done": "synthesizer"
+        }
+    )
+
     builder.add_edge("synthesizer", END)
     
     return builder.compile(), output_dir
@@ -63,11 +90,7 @@ if __name__ == "__main__":
     import json
     
     parser = argparse.ArgumentParser(description="Visual RAG Agent (LangGraph Structure)")
-    parser.add_argument("--tiles", "-t", help="Path to tiles directory")
-    parser.add_argument("--query", "-q", help="User query")
     parser.add_argument("--config", "-c", help="Path to config.json")
-    parser.add_argument("--provider", "-p", default="openai", help="LLM Provider (openai, anthropic, ollama, etc.)")
-    parser.add_argument("--model", "-m", default="gpt-4o", help="Model name")
     
     args = parser.parse_args()
     
@@ -78,24 +101,23 @@ if __name__ == "__main__":
             with open(args.config, 'r') as f: config = json.load(f)
         except: pass
     
-    if args.tiles: config["tiles_dir"] = args.tiles
-    if args.query: config["query"] = args.query
-    if args.provider: config["provider"] = args.provider
-    if args.model: config["model_name"] = args.model
-    
     tiles_dir = config.get("tiles_dir")
     query = config.get("query")
     
     if not tiles_dir or not query:
-        print("Usage: python -m ai.agent --tiles <dir> --query <query>")
+        print("Usage: python -m ai.agent --config")
         exit(1)
         
     app, out_dir = build_graph(tiles_dir, config)
     
     print(f"🚀 Running Graph. Output: {out_dir}")
-    app.invoke({
-        "topic": query,
-        "inspection_results": [],
-        "plan": None,
-        "final_report": ""
-    })
+    try:
+        app.invoke({
+            "topic": query,
+            "inspection_results": [],
+            "plan": None,
+            "final_report": "",
+        })
+    finally:
+        from utils.cost import CostTracker
+        CostTracker().print_summary()

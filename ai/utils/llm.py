@@ -20,6 +20,7 @@ def get_llm(provider: str, model_name: str, config: Optional[Dict[str, Any]] = N
     api_key = config.get("api_key") or os.environ.get("API_KEY")
     base_url = config.get("base_url") or os.environ.get("BASE_URL")
     temperature = config.get("temperature", 0.0)
+    max_tokens = config.get("max_tokens", 4000)
     
     provider = provider.lower()
     
@@ -30,18 +31,23 @@ def get_llm(provider: str, model_name: str, config: Optional[Dict[str, Any]] = N
                 model=model_name,
                 api_key=api_key,
                 base_url=base_url,
-                temperature=temperature
+                temperature=temperature,
+                max_tokens=max_tokens
             )
         
 
         elif provider == 'together':
             from langchain_together import ChatTogether
-            return ChatTogether(
-                    model=model_name,
-                    api_key=api_key,
-                    base_url=base_url,
-                    temperature=temperature
-            )
+            kwargs = {
+                "model": model_name,
+                "api_key": api_key,
+                "temperature": temperature,
+                "max_tokens": max_tokens
+            }
+            if base_url:
+                kwargs["base_url"] = base_url
+                
+            return ChatTogether(**kwargs)
             
         elif provider == "azure":
             from langchain_openai import AzureChatOpenAI

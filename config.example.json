@@ -1,7 +1,6 @@
 {
     "tiles_dir": "./repo_tiles",
-    "query": "Refactor the login flow",
-    "model_name": "gpt-4o",
-    "base_url": "https://api.openai.com/v1",
-    "api_key": "YOUR_OPENAI_KEY_OR_COMPATIBLE"
+    "provider":"together",
+    "query": "Implement robust mechanism of adding budget Limit of each team member!",
+    "model_name": "moonshotai/Kimi-K2.5"
 }

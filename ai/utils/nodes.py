@@ -5,13 +5,14 @@ import logging
 import base64
 import io
 import PIL.Image
-from typing import List, Dict, Any
+from typing import List, Dict
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.types import Send
 
-from ai.utils.state import ResearchState, WorkerState, ResearchPlan
-from ai.utils.tools import VisualDecoder, VocabularyIndex, Composer
+from utils.state import ResearchState,  ResearchPlan
+from utils.tools import VisualDecoder, VocabularyIndex, Composer
+
+from utils.cost import CostTracker
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class Nodes:
         self.output_dir = tools_config.get("output_dir", "ai/output")
         self.gen_dir = os.path.join(self.output_dir, "generation")
         os.makedirs(self.gen_dir, exist_ok=True)
+        self.stitch_count = 0
         
         # Load Visual Context
         self._load_visual_context()
@@ -113,68 +115,141 @@ class Nodes:
         try:
             plan = structured_llm.invoke(messages)
             logger.info(f"📋 Plan: {len(plan.targets)} targets identified.")
-            return {"plan": plan}
+            
+            # INITIALIZE RECURSION STATE
+            # We treat the initial plan targets as the first batch of "pending targets"
+            initial_targets = [t.family for t in plan.targets]
+            
+            return {
+                "plan": plan, 
+                "pending_targets": initial_targets,
+                "visited_targets": []
+            }
         except Exception as e:
             logger.error(f"Planner failed: {e}")
-            return {"plan": ResearchPlan(targets=[], strategy="Planning Failed")}
+            return {"plan": ResearchPlan(targets=[], strategy="Planning Failed"), "pending_targets": []}
 
-    # --- Batch Node Implementation (Reduces API Calls) ---
+    # --- Batch Node Implementation (Recursive) ---
 
     def bulk_inspector_node(self, state: ResearchState):
         """
-        Inspects ALL targets in one go using bulk_inspect and stitching.
-        Reduces N API calls to 1.
+        Processes the CURRENT batch of 'pending_targets'.
+        This node does ONE pass: Stitch -> Analyze -> Discover Next.
+        The Graph handles the recursion if 'pending_targets' is non-empty.
         """
-        if not state["plan"] or not state["plan"].targets:
-            logger.warning("No targets to inspect.")
-            return {"inspection_results": ["No targets identified."]}
-            
-        targets = state["plan"].targets
-        families = [t.family for t in targets]
+        targets = state.get("pending_targets", [])
         
-        logger.info(f"🕵️ BULK INSPECTOR: Inspecting {len(families)} families: {families}")
+        # Filter out already visited (Dedup)
+        # Note: In Graph state, 'visited_targets' accumulates. 
+        # But we need to check if the *current* targets have been visited.
+        # However, logic downstream should prevent adding visited to pending. 
+        # We'll double check here to be safe.
+        already_visited = list(state.get("visited_targets", []))
+        
+        current_batch = [t for t in targets if t not in already_visited]
+        
+        if not current_batch:
+            logger.info("🕵️ Inspector: No new targets to inspect (all visited).")
+            return {"pending_targets": []} # Clear pending to stop recursion
+            
+        logger.info(f"🕵️ BULK INSPECTOR: Processing batch of {len(current_batch)}: {current_batch}")
         
         # 1. Bulk Stitching (One Image)
-        stitched_bytes, results = self.decoder.bulk_inspect(families)
+        stitched_bytes, results = self.decoder.bulk_inspect(current_batch)
         
         if not stitched_bytes:
-            return {"inspection_results": ["⚠️ Bulk inspection failed to produce image."]}
+            return {"inspection_results": ["⚠️ Batch produced no image."], "pending_targets": []}
             
-        self.composer.add_thought(PIL.Image.open(io.BytesIO(stitched_bytes)), "Bulk Inspection")
+        # SAVE STITCHED IMAGE
+        self.stitch_count += 1
+        stitch_filename = f"bulk_stitch_{self.stitch_count}.png"
+        stitch_path = os.path.join(self.gen_dir, stitch_filename)
+        with open(stitch_path, "wb") as f:
+            f.write(stitched_bytes)
+        logger.info(f"💾 Saved stitched image: {stitch_path}")
+
+        self.composer.add_thought(PIL.Image.open(io.BytesIO(stitched_bytes)), f"Batch {self.stitch_count}")
         
-        # 2. Bulk Analysis (One LLM Call)
+        # 2. Analyze Batch
         b64 = base64.b64encode(stitched_bytes).decode('utf-8')
-        
-        prompt = f"""### BULK COMPONENT ANALYSIS
-You are analyzing a stitched grid of {len(families)} UI components.
-The components are: {json.dumps(families)}
+        import dataclasses
+        results_json = json.dumps([dataclasses.asdict(r) for r in results], indent=2)
+
+        analysis_prompt = f"""### COMPONENT ANALYSIS (Batch {self.stitch_count})
+The components are: {json.dumps(current_batch)}
+
+GOAL: Extract specific implementation details to answer the user request: "{state['topic']}"
 
 For EACH component:
-1. Identify it in the grid.
-2. Extract its key props and state.
-3. Validate its hypothesis.
-
-Return a consolidated report for all components.
+1. Identify it.
+2. Analyze its Props, State, and Dependencies.
+3. Check for any missing child components or imports.
 """
-        
         messages = [
+            SystemMessage(content="You are a strict Code Auditor. Use temperature=0.0."),
             HumanMessage(content=[
-                {"type": "text", "text": prompt},
+                {"type": "text", "text": analysis_prompt},
+                {"type": "text", "text": f"### METADATA:\n{results_json}"},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
             ])
         ]
         
+        # Main Analysis
+        response = self.llm.bind(temperature=0.0).invoke(messages)
+        CostTracker().track_response(response)
+        analysis_text = response.content
+        
+        # Log
+        log_path = os.path.join(self.gen_dir, "analysis_log.txt")
+        # Initialize log if first run
+        if self.stitch_count == 1:
+             with open(log_path, "w", encoding="utf-8") as f: f.write("--- Analysis Log ---\n")
+             
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"\n=== BATCH {self.stitch_count} ({len(current_batch)} items) ===\n{analysis_text}\n")
+            
+        # 3. Discovery Tool (Next Steps)
+        discovery_prompt = """
+### DISCOVERY STEP
+Based on the analysis, are there **missing components** we need to inspect?
+Use the tool to either complete the search or queue more targets.
+"""
+        messages.append(HumanMessage(content=analysis_text))
+        messages.append(HumanMessage(content=discovery_prompt))
+        
+        from utils.state import DiscoveryResult
+        tool_llm = self.llm.bind_tools([DiscoveryResult], tool_choice="DiscoveryResult")
+        
+        next_targets = []
         try:
-            response = self.llm.invoke(messages)
-            return {"inspection_results": [response.content]}
+             discovery_response = tool_llm.bind(temperature=0.0).invoke(messages)
+             CostTracker().track_response(discovery_response)
+             
+             if discovery_response.tool_calls:
+                 args = discovery_response.tool_calls[0]['args']
+                 result = DiscoveryResult(**args)
+                 
+                 log_msg = f"Tool: {result.status}, New: {result.new_targets}"
+                 with open(log_path, "a", encoding="utf-8") as f: f.write(f"\n>>> {log_msg}\n")
+                 
+                 if result.status == "SEARCH_CONTINUE":
+                      # Filter: Don't re-queue what we just visited or have visited
+                      for t in result.new_targets:
+                          if t and t not in already_visited and t not in current_batch:
+                              next_targets.append(t)
+                              
+                 logger.info(f"⏭️ Next Targets: {next_targets}")
+                 
         except Exception as e:
-            logger.error(f"Bulk inspection failed: {e}")
-            return {"inspection_results": [f"ERROR: {str(e)}"]}
+            logger.error(f"Discovery failed: {e}")
+            
+        return {
+            "inspection_results": [f"### Batch {self.stitch_count}\n{analysis_text}"],
+            "visited_targets": current_batch,
+            "pending_targets": next_targets # REPLACES pending with the new batch
+        }
 
     def assign_workers(self, state: ResearchState):
-        # We now route to bulk_inspector instead of fanning out
-        # Keeping this signature for graph compatibility if needed, 
-        # but technically we can just change the edge in agent.py
         pass 
 
     def synthesizer_node(self, state: ResearchState):
@@ -189,11 +264,36 @@ Return a consolidated report for all components.
             HumanMessage(content="Generate a detailed Markdown implementation plan now.")
         ]
         
-        response = self.llm.invoke(messages)
-        final_md = response.content
+        full_content = ""
         
-        self._save_plan(final_md)
-        return {"final_report": final_md}
+        # Max continuation loops to prevent infinite loops (e.g. 5)
+        for _ in range(5):
+            response = self.llm.invoke(messages)
+            CostTracker().track_response(response)
+            
+            chunk = response.content
+            full_content += chunk
+            
+            # Check finish reason
+            # OpenAI/Together usually return 'length' if max_tokens reached
+            finish_reason = response.response_metadata.get("finish_reason")
+            
+            if finish_reason == "length":
+                logger.info("⚠️ Response truncated (length). Continuing generation...")
+                from langchain_core.messages import AIMessage
+                messages.append(AIMessage(content=chunk))
+                messages.append(HumanMessage(content="Continue exactly where you left off."))
+            else:
+                break
+        
+        self._save_plan(full_content)
+        
+        # Save Cost Report
+        cost_path = os.path.join(self.gen_dir, "cost_report.txt")
+        with open(cost_path, "w", encoding="utf-8") as f:
+            f.write(CostTracker().get_summary_string())
+            
+        return {"final_report": full_content}
 
     # --- Helpers ---
 
@@ -229,6 +329,7 @@ Return a consolidated report for all components.
         
         # Use valid tool config for generic model if needed, but self.llm is sufficient
         response = self.llm.invoke(messages)
+        CostTracker().track_response(response) # Track usage here too
         return response.content
 
     def _save_plan(self, markdown: str):

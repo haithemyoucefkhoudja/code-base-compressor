@@ -10,7 +10,7 @@ import hashlib
 import glob
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import io
 
 # Default Configuration (can be overridden via constructor)
@@ -568,16 +568,77 @@ class VocabularyIndex:
     """Searchable vocabulary from the codebase."""
     
     def __init__(self, tiles_dir: str):
-        vocab_path = os.path.join(tiles_dir, "tiles.vocab.json")
+        # Patterns file is in parent directory with repo name
+        parent_dir = os.path.dirname(tiles_dir)
+        repo_name = os.path.basename(tiles_dir).replace("_tiles", "")
+        self.patterns_path = os.path.join(parent_dir, f"{repo_name}_patterns.json")
         
-        with open(vocab_path, 'r') as f:
-            raw = json.load(f)
-            self.vocab = list(raw.keys()) if isinstance(raw, dict) else raw
-        print(f"📚 Vocabulary loaded: {len(self.vocab)} families")
+        # Load patterns registry
+        if os.path.exists(self.patterns_path):
+            with open(self.patterns_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {}
+    
+        registry = {}
+        
+        # Also load the flat vocab list for fallback/completeness
+        vocab_path = os.path.join(tiles_dir, "tiles.vocab.json")
+        if os.path.exists(vocab_path):
+            with open(vocab_path, 'r') as f:
+                raw = json.load(f)
+                self.flat_vocab = list(raw.keys()) if isinstance(raw, dict) else raw
+        else:
+            self.flat_vocab = []
+
+        def register(name, src, kind, props, prop_types=None, ret_type=None,variations=None, sig=None, shapes=None):
+            if not name: return
+            if not src: src = "unknown"
+            key = f"{src}::{name}"
+            registry[key] = {
+                "name": name, 
+                "source": src, 
+                "type": kind, 
+                "props": props,
+                "prop_types": prop_types,
+                "return_type": ret_type,
+                "variations": variations,
+                "signature": sig,
+                "shapes": shapes
+            }
+            
+        for p in data.get("call_patterns", []): 
+            sig = p.get('signature') or {}
+            register(p.get("chain"), p.get("source_import"), "call", [], 
+                     variations=p.get('call_variations'), 
+                     sig=sig,)
+                     
+        for p in data.get("jsx_patterns", []): 
+            register(p.get("component"), p.get("source_import"), "jsx", p.get("common_props"),shapes=p.get('shapes'))
+                     
+        for p in data.get("constant_patterns", []): 
+            register(p.get("constant"), p.get("source_import"), "const", [])
+            
+        for p in data.get("component_definitions", []): 
+            register(p.get("component"), p.get("file"), "def", p.get("props"),
+                     prop_types=p.get('prop_types'), ret_type=p.get('return_type'))
+                     
+        for p in data.get("reference_patterns", []): 
+            register(p.get("name"), p.get("source_import"), "ref", [])
+        
+        self.registry = registry
+        
+        # Combine registry keys with flat vocab
+        self.vocab = list(set(list(registry.keys()) + self.flat_vocab))
+        print(f"📚 Vocabulary loaded: {len(self.vocab)} families ({len(registry)} rich)")
         
     def get_all(self) -> List[str]:
         """Return full vocabulary."""
         return self.vocab.copy()
+        
+    def get_entry(self, family: str) -> Dict:
+        """Get rich metadata for a family."""
+        return self.registry.get(family, {})
 
     def search(self, query: str, limit: int = 5, cutoff: float = 0.4) -> List[str]:
         """Fuzzy search for families matching the query. Prioritizes component name matches."""
