@@ -1,0 +1,8 @@
+{
+    "python_version": "3.11",
+    "dockerfile_lines": [],
+    "graphs": {
+        "agent": "./ai/agent.py:app"
+    },
+    "env": ".env"
+}

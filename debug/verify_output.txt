@@ -1,0 +1,7 @@
+Query: MessageContainer
+Top Matches:
+"@/components/shortcut-ui/messanger-container"::MessangerContainer
+components\shortcut-ui\messanger-container.tsx::MessangerContainer
+Declaration::lastMessageContent
+"lucide-react"::MessageCircle
+Declaration::DockerMessageContext

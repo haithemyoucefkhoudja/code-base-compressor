@@ -513,6 +513,33 @@ def encode_rows_to_image(
     # Save coords
     with open(out_png_path.replace(".png", ".coords.json"), "w", encoding="utf-8") as f:
         json.dump(all_coords, f, indent=2)
+    
+    # --- NEW: Save tile manifest (which families in which tile) ---
+    tile_manifest = {}
+    for coord in all_coords:
+        tile_idx = coord.get('tile_index', 0)
+        family = coord['family']
+        if tile_idx not in tile_manifest:
+            tile_manifest[tile_idx] = []
+        if family not in tile_manifest[tile_idx]:
+            tile_manifest[tile_idx].append(family)
+    
+    manifest_path = out_png_path.replace(".png", ".manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "total_tiles": len(saved_images),
+            "tile_width": final_w,
+            "tile_height_max": cfg.max_dimension,
+            "tiles": {
+                str(idx): {
+                    "image": saved_images[idx] if idx < len(saved_images) else None,
+                    "families": families,
+                    "family_count": len(families)
+                }
+                for idx, families in tile_manifest.items()
+            }
+        }, f, indent=2)
+    print(f"Saved: {manifest_path}")
         
     return {"dimensions": [final_w, final_h], "tiles": len(saved_images), "images": saved_images}
 

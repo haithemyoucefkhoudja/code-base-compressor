@@ -1,0 +1,106 @@
+--- SEARCH RESULTS ---
+"recharts"::RechartsPrimitive.ResponsiveContainer
+Declaration::DockerMessageProvider
+"@/db/api"::apiStoreMessage
+Declaration::setParsedMessage
+Declaration::VirtualizedMessageList
+Declaration::errorMessage
+Declaration::{ pinnedMessage, lastMessage }
+"../ui/react-markdown"::MarkdownMessage
+Declaration::{ messages, error, rewrite, lastMessage, pinnedMessage }
+"@langchain/core/messages"::HumanMessage
+Declaration::setDockerMessage
+Declaration::[dockerMessage, setDockerMessage]
+Declaration::pinMessage
+"./message-display"::VerticalMessageDisplay
+Declaration::{ error, formItemId, formDescriptionId, formMessageId }
+Declaration::calculateMessageHeight
+Declaration::[statusMessage, setStatusMessage]
+Declaration::setSaveMessage
+Declaration::[messages, setMessages]
+Declaration::closePinnedMessage
+Declaration::FormMessage
+Declaration::{ toggleLastMessage, togglePinnedMessage,  lastMessage, pinnedMessage }
+"./database"::getMessages
+"./message-display"::HorizontalMessageDisplay
+Declaration::togglePinnedMessage
+Declaration::setStatusMessage
+Declaration::langChainMessage
+"@langchain/core/messages"::AIMessage
+Declaration::useDockerMessage
+Declaration::{ lastMessage }
+Declaration::setMessages
+Declaration::{
+    setConversation,
+    setError,
+    error,
+    isLoading: chatLoading,
+    setMessages,
+    setLastMessage,
+    setPinnedMessage,
+    conversation,
+  }
+Declaration::optimisticUserMessageId
+Declaration::userMessageIndex
+"./error-message"::ErrorMessage
+Declaration::DockerMessageContext.Provider
+components\ui\react-markdown.tsx::MarkdownMessage
+"@/components/shortcut-ui/messanger-container"::MessangerContainer
+Declaration::DockerMessageContext
+Declaration::_convertOpenAIDeltaToBaseMessageChunk
+Declaration::setLastMessage
+Declaration::chatMessages
+Declaration::saveUserMessage
+Declaration::{ setError, conversation, isLoading, error, closeLastMessage, closePinnedMessage }
+"lucide-react"::MessageCircle
+Declaration::displayMessageVisible
+"./message-list"::MessageList
+Declaration::{ pinnedMessage, lastMessage, isLoading, error, messages, conversation }
+"@/db/database"::getAllMessages
+"@/components/ui/react-markdown"::MarkdownMessage
+Declaration::{ messages: chatMessages }
+Declaration::hasSuccessiveUserMessages
+Declaration::{
+    data: messagesdata,
+    isError: isErrorMessage,
+    error: errorMeessage,
+  }
+Declaration::{ dockerMessage }
+"lucide-react"::MessageSquare
+Declaration::updateDockerMessage
+"@/hooks/use-messages-query"::useGetMessages
+Declaration::{ updateDockerMessage, dockerMessage }
+Declaration::{ pinMessage, messages, pinnedMessage }
+Declaration::[lastMessage, setLastMessage]
+components\shortcut-ui\message-sources.tsx::MessageSources
+components\shortcut-ui\message-list.tsx::MessageList
+components\shortcut-ui\error-message.tsx::ErrorMessage
+Declaration::toggleLastMessage
+Declaration::ChartContainer
+Declaration::paginatedMessages
+"@langchain/core/prompts"::MessagesPlaceholder
+Declaration::pinnedMessage
+Declaration::_convertOpenAIChatCompletionMessageToBaseMessage
+Declaration::lastMessageContent
+components\shortcut-ui\messanger-container.tsx::MessangerContainer
+Declaration::closeLastMessage
+Declaration::finalAssistantMessageData
+"./database"::storeMessage
+providers\chat-provider.tsx::DockerMessageProvider
+"./message-sources"::MessageSources
+Declaration::{ messages,  rewrite, lastMessage, pinnedMessage }
+Declaration::{ error, formMessageId }
+Declaration::lastMessageVisible
+Declaration::setPinnedMessage
+Declaration::dockerMessageContextValue
+Declaration::VirtMessageList
+Declaration::[parsedMessage, setParsedMessage]
+Declaration::[saveMessage, setSaveMessage]
+Declaration::MessageDisplayWrapper
+"./message-box"::MessageBox
+Declaration::userMessage
+Declaration::{lastMessage, pinnedMessage}
+"./database"::editMessage
+Declaration::LastMessageVisible
+Declaration::[pinnedMessage, setPinnedMessage]
+Declaration::sendLLMMessage

@@ -157,7 +157,30 @@ class VisualDecoder:
     def _initialize_context(self) -> VisualContext:
         print("👁️ VisualDecoder: Loading Atlas and calibrating palette...")
         
-        # Load and stitch all tile images
+        # --- Load Manifest (if available) for tile-to-family mapping ---
+        manifest_path = os.path.join(self.tiles_dir, "tiles.manifest.json")
+        self.manifest = None
+        self.family_to_tile = {}  # family -> tile_index
+        
+        if os.path.exists(manifest_path):
+            with open(manifest_path, 'r') as f:
+                self.manifest = json.load(f)
+            print(f"   Manifest: {self.manifest.get('total_tiles', 1)} tiles")
+            
+            # Build reverse index: family -> tile_index
+            for tile_idx_str, tile_info in self.manifest.get("tiles", {}).items():
+                tile_idx = int(tile_idx_str)
+                for fam in tile_info.get("families", []):
+                    if fam not in self.family_to_tile:
+                        self.family_to_tile[fam] = tile_idx
+        
+        # --- Lazy Tile Image Cache ---
+        # Store tile paths and load on demand
+        self.tile_images_cache: Dict[int, Image.Image] = {}
+        self.tile_paths = {i: path for i, path in enumerate(self.atlas_paths)}
+        
+        # For backward compatibility, also create stitched image
+        # (used by palette and bulk operations)
         tile_images = []
         for tile_path in self.atlas_paths:
             if not os.path.exists(tile_path): 
@@ -167,26 +190,33 @@ class VisualDecoder:
         # Stitch tiles vertically (they were split by height)
         if len(tile_images) == 1:
             img = tile_images[0]
+            # Cache single tile
+            self.tile_images_cache[0] = img
         else:
             total_width = tile_images[0].width
             total_height = sum(t.height for t in tile_images)
             img = Image.new("RGB", (total_width, total_height))
             y_offset = 0
-            for tile in tile_images:
+            for idx, tile in enumerate(tile_images):
                 img.paste(tile, (0, y_offset))
+                self.tile_images_cache[idx] = tile  # Cache each tile
                 y_offset += tile.height
             print(f"   Stitched {len(tile_images)} tiles -> {total_width}x{total_height}")
         
         with open(self.coords_path, 'r') as f:
             coords_list = json.load(f)
             # Handle coords that may have tile_index (for split images)
-            # Reconstruct original y coordinates
+            # Build coords_map with tile_index preserved
             coords_map = {}
             for item in coords_list:
                 family = item["family"]
                 if family in coords_map:
                     continue  # Skip duplicates from split tiles
-                # If tile_index present, use original_y if available
+                # Store tile_index in the item for later use
+                item["_tile_index"] = item.get("tile_index", 0)
+                # IMPORTANT: Store the tile-local y BEFORE overwriting with stitched y
+                item["_tile_local_bbox"] = item["bbox"].copy()  # Keep tile-local coords
+                # Overwrite bbox with stitched coords for backward compatibility
                 if "original_y" in item:
                     item["bbox"][1] = item["original_y"]
                 coords_map[family] = item
@@ -217,45 +247,90 @@ class VisualDecoder:
             palette[simulate_tile_color(fam)] = fam
             
         return VisualContext(img, coords_map, palette)
+    
+    def _get_tile_image(self, tile_index: int) -> Optional[Image.Image]:
+        """Get a specific tile image (lazy loading)."""
+        if tile_index in self.tile_images_cache:
+            return self.tile_images_cache[tile_index]
+        
+        if tile_index in self.tile_paths:
+            img = Image.open(self.tile_paths[tile_index]).convert("RGB")
+            self.tile_images_cache[tile_index] = img
+            return img
+        
+        return None
 
     def _normalize_family(self, family: str) -> str:
-        """Standardize family names for robust lookup."""
-        if not family: return family
+        """Standardize family names for robust lookup with fuzzy matching."""
+        if not family: 
+            return family
         
-        # 1. Clean up outer quotes and whitespace
-        cleaned = family.strip().strip('"').strip("'")
+        # 0. Try exact match first (most common case)
+        if family in self.context.coords:
+            return family
         
-        # 2. Normalize path separators to backslashes
-        normalized = cleaned.replace('/', '\\')
+        # 1. Build candidate variations
+        candidates = []
         
-        # 3. Direct match
-        if normalized in self.context.coords:
-            return normalized
+        # Original with stripped whitespace
+        stripped = family.strip()
+        candidates.append(stripped)
+        
+        # Try with/without outer quotes
+        if stripped.startswith('"') and stripped.endswith('"'):
+            candidates.append(stripped[1:-1])  # Remove quotes
+        else:
+            candidates.append(f'"{stripped}"')  # Add quotes
+        
+        # Try swapping path separators (both directions)
+        for c in list(candidates):
+            candidates.append(c.replace('\\', '/'))
+            candidates.append(c.replace('/', '\\'))
+        
+        # Handle :: splitting for source::name patterns
+        if '::' in family:
+            parts = family.split('::', 1)
+            source, name = parts[0].strip(), parts[1].strip()
             
-        # 4. Handle mixed separators (some tools might use both)
-        # Already handled by .replace('/', '\\') but let's be sure
-        
-        # 5. Handle internal quoting inconsistencies (e.g., "source"::name)
-        if '::' in normalized:
-            source, name = normalized.split('::', 1)
-            # Try variations of the source part
-            variations = [
-                f'"{source}"::{name}',    # Add quotes
-                f'{source.strip('"')}::{name}' # Remove quotes
-            ]
-            for var in variations:
-                if var in self.context.coords:
-                    return var
-                    
-        # 6. Try adding/removing quotes from the entire string
-        if f'"{normalized}"' in self.context.coords:
-            return f'"{normalized}"'
+            # Source variations: with/without quotes and path separators
+            source_vars = [source]
+            if source.startswith('"'):
+                source_vars.append(source[1:])  # Remove leading quote
+            else:
+                source_vars.append(f'"{source}')  # Add leading quote
+            if source.endswith('"'):
+                source_vars.append(source[:-1])  # Remove trailing quote
+            else:
+                source_vars.append(f'{source}"')  # Add trailing quote
             
-        return normalized
+            # Path separator variants for source
+            for sv in list(source_vars):
+                source_vars.append(sv.replace('\\', '/'))
+                source_vars.append(sv.replace('/', '\\'))
+            
+            # Combine source variations with name
+            for sv in source_vars:
+                candidates.append(f'{sv}::{name}')
+        
+        # 2. Try each candidate
+        for candidate in candidates:
+            if candidate in self.context.coords:
+                return candidate
+        
+        # 3. Last resort: substring match on family key
+        search_key = family.replace('\\', '/').replace('"', '').strip()
+        for key in self.context.coords:
+            key_clean = key.replace('\\', '/').replace('"', '').strip()
+            if search_key in key_clean or key_clean in search_key:
+                return key
+        
+        # 4. Give up, return original
+        return family
 
     def crop_and_decode(self, family: str) -> Tuple[Optional[Image.Image], List[str]]:
         """
         Inspect a single family's bbox, return the image crop and list of found sub-families.
+        Uses per-tile coordinates when manifest is available for efficient memory usage.
         """
         family = self._normalize_family(family)
         if family not in self.context.coords: 
@@ -266,7 +341,18 @@ class VisualDecoder:
         if w <= 0 or h <= 0: 
             return None, []
         
-        crop = self.context.image.crop((x, y, x + w, y + h))
+        # Determine which tile to use
+        tile_index = meta.get("_tile_index", 0)
+        
+        # Use per-tile image if available, otherwise use stitched
+        if tile_index in self.tile_images_cache and "_tile_local_bbox" in meta:
+            source_image = self.tile_images_cache[tile_index]
+            # Use tile-local coordinates (NOT stitched y)
+            lx, ly, lw, lh = meta["_tile_local_bbox"]
+            crop = source_image.crop((lx, ly, lx + lw, ly + lh))
+        else:
+            # Fallback to stitched image (uses stitched coordinates)
+            crop = self.context.image.crop((x, y, x + w, y + h))
         
         found_families = set()
         HEADER_H, TILE_SIZE = 24, 16
@@ -371,36 +457,49 @@ class VisualDecoder:
         
         return buf.getvalue(), results
 
-    def _stitch_grid(self, crops: List[Tuple[Image.Image, str]], max_cols: int = 3) -> Image.Image:
-        """Create a labeled grid of component crops."""
+    def _stitch_grid(self, crops: List[Tuple[Image.Image, str]], max_width: int = 2048) -> Image.Image:
+        """
+        Create a labeled grid of component crops using BOOKSHELF packing.
+        Packs items horizontally until max_width is reached, then wraps to next row.
+        """
         if not crops:
             return Image.new("RGB", (100, 100), (40, 44, 52))
         
         PAD = 10
-        LABEL_H = 30
+        LABEL_H = 0  # No labels for now, just visual
         
-        # Calculate dimensions
-        max_w = max(c[0].width for c in crops)
-        max_h = max(c[0].height for c in crops)
+        # Shelf packing algorithm
+        positions = []
+        current_x, current_y = PAD, PAD
+        row_h = 0
+        total_w, total_h = 0, 0
         
-        cols = min(len(crops), max_cols)
-        rows = (len(crops) + cols - 1) // cols
+        for crop, label in crops:
+            w, h = crop.size
+            
+            # Check if item fits on current row
+            if current_x + w + PAD > max_width:
+                # Wrap to next row
+                current_y += row_h + PAD
+                current_x = PAD
+                row_h = 0
+            
+            positions.append((crop, current_x, current_y, label))
+            current_x += w + PAD
+            row_h = max(row_h, h)
+            total_w = max(total_w, current_x)
         
-        total_w = cols * (max_w + PAD) + PAD
-        total_h = rows * (max_h + LABEL_H + PAD) + PAD
+        total_h = current_y + row_h + PAD
+        total_w = max(total_w, 100)
         
-        canvas = Image.new("RGB", (total_w, total_h), 0)
+        # Create canvas
+        canvas = Image.new("RGB", (total_w, total_h), (30, 30, 30))
         draw = ImageDraw.Draw(canvas)
         
-        
-        for i, (crop, _) in enumerate(crops):
-            col = i % cols
-            row = i // cols
-            x = PAD + col * (max_w + PAD)
-            y = PAD + row * (max_h + LABEL_H + PAD)
-            # Draw border and paste
-            y += LABEL_H
-            draw.rectangle([x-2, y-2, x+crop.width+2, y+crop.height+2], outline=(100, 100, 100))
+        # Paste crops with borders
+        for crop, x, y, label in positions:
+            # Draw border
+            draw.rectangle([x-2, y-2, x+crop.width+2, y+crop.height+2], outline=(80, 80, 80))
             canvas.paste(crop, (x, y))
         
         return canvas
@@ -479,3 +578,41 @@ class VocabularyIndex:
     def get_all(self) -> List[str]:
         """Return full vocabulary."""
         return self.vocab.copy()
+
+    def search(self, query: str, limit: int = 5, cutoff: float = 0.4) -> List[str]:
+        """Fuzzy search for families matching the query. Prioritizes component name matches."""
+        import difflib
+        
+        query_lower = query.lower()
+        
+        # 0. exact match in full vocab (fastest)
+        matches = [v for v in self.vocab if query_lower in v.lower()]
+        
+        # 1. Check against component names (suffix after ::)
+        # Create a mapping of {name: full_family} for candidates
+        name_map = {}
+        for v in self.vocab:
+            if '::' in v:
+                _, name = v.split('::', 1)
+                name = name.strip()
+                if name not in name_map:
+                    name_map[name] = []
+                name_map[name].append(v)
+        
+        # Fuzzy match on pure names first (high priority)
+        fuzzy_names = difflib.get_close_matches(query, list(name_map.keys()), n=limit, cutoff=cutoff)
+        
+        for name in fuzzy_names:
+            for full_v in name_map[name]:
+                if full_v not in matches:
+                    matches.append(full_v)
+        
+        # 2. Fuzzy match against full strings (fallback)
+        if len(matches) < limit:
+            remaining = limit - len(matches)
+            # Filter out already found to avoid duplicates
+            candidates = [v for v in self.vocab if v not in matches]
+            fuzzy_full = difflib.get_close_matches(query, candidates, n=remaining, cutoff=cutoff)
+            matches.extend(fuzzy_full)
+        
+        return matches[:limit]

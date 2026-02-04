@@ -4,3 +4,5 @@ repo/
 *_patterns.json
 repo_*
 2026*
+.pytest_cache
+.env*
