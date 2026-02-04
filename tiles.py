@@ -107,7 +107,9 @@ def generate_legend(unique_families: List[str], filename: str, cfg: TileConfig):
     
     max_text_w = 0
     for fam in families:
-        bbox = dummy_draw.textbbox((0, 0), fam, font=font)
+        fam_draw  = re.sub(r"[\n\t\r]+", " ", fam).strip()
+        
+        bbox = dummy_draw.textbbox((0, 0), fam_draw, font=font)
         w = bbox[2] - bbox[0]
         max_text_w = max(max_text_w, w)
             
@@ -135,7 +137,8 @@ def generate_legend(unique_families: List[str], filename: str, cfg: TileConfig):
         
         glyph = glyph_for_family(fam, cfg)
         img.paste(Image.fromarray(glyph), (x + 10, y))
-        draw.text((x + 10 + cfg.tile_size + 10, y), fam, fill=(220, 220, 220), font=font)
+        fam_draw  = re.sub(r"[\n\t\r]+", " ", fam).strip()
+        draw.text((x + 10 + cfg.tile_size + 10, y), fam_draw, fill=(220, 220, 220), font=font)
 
     img.save(filename)
     print(f"Saved legend to {filename}")
@@ -199,72 +202,135 @@ def encode_rows_to_image(
             max_data_tokens = max(max_data_tokens, len(r))
         
         # B. Calculate Text Width
-        bbox = dummy_draw.textbbox((0, 0), fam, font=font)
+        fam_draw  = re.sub(r"[\n\t\r]+", " ", fam).strip()
+        bbox = dummy_draw.textbbox((0, 0), fam_draw, font=font)
         text_w_px = bbox[2] - bbox[0] + 16 # padding
         
         # C. Calculate Required Width in TILES
-        # We need enough tiles to cover the text, OR the data, whichever is wider.
-        # width in pixels must be multiple of tile_size
+        # Max tiles allowed (10000px - border / 16)
+        MAX_TILES_PER_ROW = (cfg.max_dimension - (cfg.tile_size * 2)) // cfg.tile_size
         
         width_needed_px = max(text_w_px, (max_data_tokens + 1) * cfg.tile_size)
-        
-        # Snap up to nearest tile count
         total_tiles_wide = math.ceil(width_needed_px / cfg.tile_size)
         
+        # Cap at Max Width
+        if total_tiles_wide > MAX_TILES_PER_ROW:
+            total_tiles_wide = MAX_TILES_PER_ROW
+            
         width_px = total_tiles_wide * cfg.tile_size
         global_max_width = max(global_max_width, width_px)
         
-        # Normalize rows:
-        # PUSH THE 'SEP' TO THE FAR RIGHT (last tile index)
-        norm_rows = []
-        for r in group_rows:
-            current_len = len(r)
-            # We need to fill from current_len up to (total_tiles_wide - 1) with PAD
-            # The very last slot (total_tiles_wide - 1) is SEP
-            
-            pads_needed = (total_tiles_wide - 1) - current_len
-            if pads_needed < 0: pads_needed = 0 # sanity check
-            
-            padded = r + [cfg.pad_family] * pads_needed
-            padded.append(cfg.sep_family) # SEP is now at the right edge
-            norm_rows.append(padded)
-            
-        n_rows = len(norm_rows)
-        height_px = header_h + (n_rows * cfg.tile_size) + sep_h
+        # Normalize rows with Wrapping
+        # Logic: 
+        # 1. Wrap individual examples if they exceed width.
+        # 2. Separate DIFFERENT examples with a 'Stripe' row (tile_size height).
+        # 3. No stripes between wrapped lines of the same example.
         
-        block_img = Image.new("RGB", (width_px, height_px), (255,255,255))
+        processed_rows = []
+        for i, r in enumerate(group_rows):
+            # Add SEP to the end of the logic sequence
+            full_seq = r + [cfg.sep_family]
+            
+            # Wrap
+            idx = 0
+            while idx < len(full_seq):
+                chunk = full_seq[idx : idx + total_tiles_wide]
+                
+                # Pad chunk to full width if needed
+                if len(chunk) < total_tiles_wide:
+                    chunk = chunk + [cfg.pad_family] * (total_tiles_wide - len(chunk))
+                    
+                processed_rows.append( (chunk, 1.0) ) # Normal height row
+                idx += total_tiles_wide
+            
+            # Add Stripe after example (if not the last one, or maybe always?)
+            # User said "before and after". Let's put a separator after each example.
+            # "make it tile size" -> 1.0 factor
+            if i < len(group_rows) - 1:
+                 processed_rows.append( ([], 1.0) )
+            
+        # Recalculate Content Height based on variable row heights
+        content_h = header_h + sep_h
+        for _, factor in processed_rows:
+            content_h += int(cfg.tile_size * factor)
+
+        # Recalculate Content Height based on variable row heights
+        content_w = width_px
+        content_h = header_h + sep_h
+        for _, factor in processed_rows:
+            content_h += int(cfg.tile_size * factor)
+
+        # Add Border Tiles (16px on all sides)
+        BORDER_SIZE = cfg.tile_size
+        full_w = content_w + (BORDER_SIZE * 2)
+        full_h = content_h + (BORDER_SIZE * 2)
+        
+        block_img = Image.new("RGB", (full_w, full_h), (255,255,255))
         draw = ImageDraw.Draw(block_img)
         
-        # Header
-        draw.rectangle([(0,0), (width_px, header_h)], fill=(220,220,220))
-        draw.text((4, 4), fam, fill=(0,0,0), font=font)
+        # Draw Border Tiles
+        # Generate a border glyph for this family
+        border_glyph = glyph_for_family(fam + "::BORDER", cfg)
+        b_tile = Image.fromarray(border_glyph)
         
-        # Tiles
-        y = header_h
-        for row in norm_rows:
-            for i, tok in enumerate(row):
-                block_img.paste(Image.fromarray(glyph_cache[tok]), (i*cfg.tile_size, y))
-            y += cfg.tile_size
+        # Top & Bottom Border
+        for bx in range(0, full_w, BORDER_SIZE):
+            block_img.paste(b_tile, (bx, 0))
+            block_img.paste(b_tile, (bx, full_h - BORDER_SIZE))
             
-        # Bottom Separator Bar
-        draw.rectangle([(0, height_px - sep_h), (width_px, height_px)], fill=(0,0,0))
+        # Left & Right Border
+        for by in range(BORDER_SIZE, full_h - BORDER_SIZE, BORDER_SIZE):
+            block_img.paste(b_tile, (0, by))
+            block_img.paste(b_tile, (full_w - BORDER_SIZE, by))
+            
+        # Draw Content inside Border
+        # Header Background
+        draw.rectangle([(BORDER_SIZE, BORDER_SIZE), (BORDER_SIZE + content_w, BORDER_SIZE + header_h)], fill=(220,220,220))
         
-        # FULL BORDER
-        draw.rectangle([(0, 0), (width_px - 1, height_px - 1)], outline=(0,0,0), width=1)
+        fam_draw  = re.sub(r"[\n\t\r]+", " ", fam).strip()
+        
+        draw.text((BORDER_SIZE + 4, BORDER_SIZE + 4), fam_draw, fill=(0,0,0), font=font)
+        
+        # Tiles & Stripes
+        y = BORDER_SIZE + header_h
+        
+        # We don't generate a stripe glyph anymore, just use black pixels.
+        
+        for row_data, factor in processed_rows:
+            h_px = int(cfg.tile_size * factor)
+            
+            if not row_data:
+                # Stripe Row (Empty Data) - Draw BLACK separator
+                # Draw a black rectangle across the content width
+                # (Inside standard borders)
+                draw.rectangle([(BORDER_SIZE, y), (BORDER_SIZE + width_px, y + h_px)], fill=(0,0,0))
+            else:
+                # Normal Row
+                for i, tok in enumerate(row_data):
+                    block_img.paste(Image.fromarray(glyph_cache[tok]), (BORDER_SIZE + i*cfg.tile_size, y))
+                    
+            y += h_px
+            
+        # Bottom Separator Bar (inside border)
+        draw.rectangle([(BORDER_SIZE, BORDER_SIZE + content_h - sep_h), (BORDER_SIZE + content_w, BORDER_SIZE + content_h)], fill=(0,0,0))
+        
+        # 1px Outline invalid inside border? User asked for 16x16 tiles.
+        # But maybe we keep a thin line around content?
+        draw.rectangle([(BORDER_SIZE, BORDER_SIZE), (full_w - BORDER_SIZE - 1, full_h - BORDER_SIZE - 1)], outline=(0,0,0), width=1)
         
         meta = {
             "family": fam,
-            "w": width_px,
-            "h": height_px,
-            "rows": n_rows,
+            "w": full_w,
+            "h": full_h,
+            "rows": len(processed_rows),
             "limit": total_tiles_wide
         }
         blocks.append((block_img, meta))
-
+        
     if not blocks: return {}
 
     # 4. Shelf Packing - Cap width at max_dimension
-    target_width = min(max(global_max_width, 4096), cfg.max_dimension)
+    target_width = min(max(global_max_width + (cfg.tile_size*2), 4096), cfg.max_dimension)
     
     current_shelf_x = 0
     current_shelf_h = 0
@@ -273,22 +339,66 @@ def encode_rows_to_image(
     placed_items = [] 
     
     current_y = 0
+    page_limit = cfg.max_dimension
     
     for b_img, b_meta in blocks:
         w, h = b_meta['w'], b_meta['h']
         
+        # Check if item fits on current shelf horizontally
         if current_shelf_x + w <= target_width:
-            current_shelf_items.append((b_img, current_shelf_x, current_y, b_meta))
-            current_shelf_x += w
-            current_shelf_h = max(current_shelf_h, h)
+            # Fits horizontally. 
+            # Now Check Vertical Page Constraints for this item
+            item_bottom = current_y + h
+            
+            if item_bottom > page_limit:
+                # This item crosses the page boundary!
+                # We cannot place it on this shelf (or this shelf is invalid here).
+                
+                # Strategy:
+                # 1. Flush current shelf to placed_items (it's done).
+                for item in current_shelf_items: placed_items.append(item)
+                
+                # 2. Advance current_y to start of NEXT PAGE
+                current_y = page_limit
+                page_limit += cfg.max_dimension
+                
+                # 3. Reset Shelf
+                current_shelf_x = 0
+                current_shelf_h = 0
+                current_shelf_items = []
+                
+                # 4. Now place item on new page shelf
+                current_shelf_items.append((b_img, current_shelf_x, current_y, b_meta))
+                current_shelf_x += w
+                current_shelf_h = h
+            else:
+                # Safe to place
+                current_shelf_items.append((b_img, current_shelf_x, current_y, b_meta))
+                current_shelf_x += w
+                current_shelf_h = max(current_shelf_h, h)
+                
         else:
-            for item in current_shelf_items:
-                placed_items.append(item)
+            # Does not fit horizontally. Start NEW SHELF (New Line).
+            for item in current_shelf_items: placed_items.append(item)
             
             current_y += current_shelf_h
+            
+            # Check if this NEW shelf start overlaps boundary? 
+            # Usually strict packing prevents this if we check item-by-item below.
+            # But let's check if the *start* y is valid?
+            # Actually, `current_y` is just the top.
+            
             current_shelf_x = 0
             current_shelf_h = 0
             current_shelf_items = []
+            
+            # Now we try to place the item on this NEW shelf.
+            # Again, check vertical fit.
+            if current_y + h > page_limit:
+                # New line still crosses boundary!
+                # Force Page Break
+                current_y = page_limit
+                page_limit += cfg.max_dimension
             
             current_shelf_items.append((b_img, current_shelf_x, current_y, b_meta))
             current_shelf_x += w
@@ -450,8 +560,6 @@ if __name__ == "__main__":
             if not hname: continue
             
             # Remove newlines to prevent overlap
-            hname = hname.replace("\n", " ").strip()
-                
             src = p.get("source_import") or p.get("file") or "unknown"
             hkey = f"{src}::{hname}"
             if hkey not in registry: register(hname, src, "auto")

@@ -69,6 +69,9 @@ def main():
     cleaned_constants = clean_constant_patterns(const_patterns)
     # Create a set of all names already captured to avoid duplicates
     captured_names = set()
+    
+    cleaned_components = [comp for comp in all_component_defs]
+    # captured_names.update(comp.name for comp  in cleaned_components)
     captured_names.update(jsx['component'] for jsx in cleaned_jsx)
     for jsx in cleaned_jsx:
         captured_names.update(jsx.get('sub_components', []))
@@ -81,8 +84,6 @@ def main():
         captured_names.update(call.get('sub_patterns', []))
     
     
-    cleaned_components = [comp for comp in all_component_defs if comp.name not in captured_names]
-    captured_names.update(comp.name for comp  in cleaned_components)
 
     # Filter constants: Remove if already in captured_names
     cleaned_constants = [c for c in cleaned_constants if c['constant'] not in captured_names]

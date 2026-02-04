@@ -8,7 +8,7 @@ import os
 import json
 import hashlib
 import glob
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 import io
@@ -46,11 +46,17 @@ class VisualContext:
 class InspectionResult:
     """Result of inspecting a component's visual tile."""
     family: str
-    # image_bytes: bytes
     neighbors: List[str]
     color_analysis: Dict[str, int]  # family -> pixel count
     density: str  # "sparse", "medium", "dense"
     props: List[str]
+    # Detailed Context
+    # Detailed Context
+    prop_types: Optional[Dict[str, Any]] = None
+    return_type: Optional[str] = None
+    variations: Optional[List[Dict[str, Any]]] = None
+    signature: Optional[Dict[str, Any]] = None
+    shapes: Optional[List[Dict[str, Any]]] = None
 
 # --- Tool 1: Visual Decoder (The Eyes) ---
 
@@ -90,17 +96,40 @@ class VisualDecoder:
     
         registry = {}
     
-        def register(name, src, kind, props):
+        def register(name, src, kind, props, prop_types=None, ret_type=None,variations=None, sig=None, shapes=None):
             if not name: return
             if not src: src = "unknown"
             key = f"{src}::{name}"
-            registry[key] = {"name": name, "source": src, "type": kind, "props": props}
+            registry[key] = {
+                "name": name, 
+                "source": src, 
+                "type": kind, 
+                "props": props,
+                "prop_types": prop_types,
+                "return_type": ret_type,
+                "variations": variations,
+                "signature": sig,
+                "shapes": shapes
+            }
             
-        for p in data.get("call_patterns", []): register(p.get("chain"), p.get("source_import"), "call", [])
-        for p in data.get("jsx_patterns", []): register(p.get("component"), p.get("source_import"), "jsx", p.get("common_props"))
-        for p in data.get("constant_patterns", []): register(p.get("constant"), p.get("source_import"), "const", [])
-        for p in data.get("component_definitions", []): register(p.get("component"), p.get("file"), "def", p.get("props"))
-        for p in data.get("reference_patterns", []): register(p.get("name"), p.get("source_import"), "ref", [])
+        for p in data.get("call_patterns", []): 
+            sig = p.get('signature') or {}
+            register(p.get("chain"), p.get("source_import"), "call", [], 
+                     variations=p.get('call_variations'), 
+                     sig=sig,)
+                     
+        for p in data.get("jsx_patterns", []): 
+            register(p.get("component"), p.get("source_import"), "jsx", p.get("common_props"),shapes=p.get('shapes'))
+                     
+        for p in data.get("constant_patterns", []): 
+            register(p.get("constant"), p.get("source_import"), "const", [])
+            
+        for p in data.get("component_definitions", []): 
+            register(p.get("component"), p.get("file"), "def", p.get("props"),
+                     prop_types=p.get('prop_types'), ret_type=p.get('return_type'))
+                     
+        for p in data.get("reference_patterns", []): 
+            register(p.get("name"), p.get("source_import"), "ref", [])
         self.registry = registry
         
         self.context = self._initialize_context()
@@ -305,7 +334,12 @@ class VisualDecoder:
             family=family,
             neighbors=neighbors,
             color_analysis=color_counts,
-            density=density
+            density=density,
+            shapes=reg_entry.get('shapes'),
+            prop_types=reg_entry.get('prop_types'),
+            return_type=reg_entry.get('return_type'),
+            variations=reg_entry.get('variations'),
+            signature=reg_entry.get('signature')
         )
 
     def bulk_inspect(self, families: List[str]) -> Tuple[bytes, List[InspectionResult]]:
