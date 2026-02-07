@@ -6,7 +6,7 @@ import tiktoken
 import PIL.Image
 from datetime import datetime
 from typing import Any, Dict, List
-
+import json
 logger = logging.getLogger(__name__)
 
 class CostTracker:
@@ -44,6 +44,9 @@ class CostTracker:
         """
         try:
             usage = response.response_metadata.get("token_usage", {})
+            
+            logger.info(f"📊 [PROMPT USAGE]: {json.dumps(usage, indent=2)}")
+            
             input_tokens = usage.get("prompt_tokens", 0)
             output_tokens = usage.get("completion_tokens", 0)
             

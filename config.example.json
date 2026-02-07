@@ -1,7 +1,7 @@
 {
     "tiles_dir": "./repo_tiles",
-    "provider":"together",
+    "provider":"google",
     "query": "What invariant guarantees that exactly one database backend is reachable and used for the lifetime of a request, and where is that invariant enforced?",
-    "model_name": "moonshotai/Kimi-K2.5",
-    "pricing":{"input":0.5,"output":2.8}
+    "model_name": "gemini-3-pro-preview",
+    "pricing":{"input":2,"output":18}
 }

@@ -383,7 +383,36 @@ def extract_usages(file_path: str, source_code: bytes) -> Tuple[List[CallUsage],
                     ))
                     current_context = context + [chain]
 
-        # 2. Structural/Flow logic as "Calls"
+        # 2. Standalone Member Expressions (Property Access like process.env)
+        elif node.type == "member_expression":
+            # Avoid partial chains and double-counting with calls
+            is_outermost = True
+            if node.parent:
+                if node.parent.type == "member_expression":
+                    is_outermost = False
+                elif node.parent.type in ("call_expression", "new_expression"):
+                    func = node.parent.child_by_field_name("function") or node.parent.child_by_field_name("constructor")
+                    if func == node:
+                        is_outermost = False
+            
+            if is_outermost:
+                chain = get_full_chain(node, source)
+                if chain != "<unknown>":
+                    calls.append(CallUsage(
+                        chain=chain,
+                        code=source[node.start_byte:node.end_byte].decode('utf-8', errors='replace'),
+                        file=file_path,
+                        line=node.start_point[0] + 1,
+                        structure="property_access",
+                        source_import=findImportSource(extracted_imports_dict, chain),
+                        props=[],
+                        prop_types={},
+                        return_type="unknown",
+                        context=context[:],
+                        extension=file_path.split('.')[-1]
+                    ))
+
+        # 3. Structural/Flow logic as "Calls"
         elif node.type == "binary_expression":
             operator = node.child_by_field_name("operator")
             if operator and source[operator.start_byte:operator.end_byte].decode('utf-8') == "instanceof":

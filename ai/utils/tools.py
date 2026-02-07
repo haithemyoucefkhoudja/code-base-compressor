@@ -42,7 +42,7 @@ def get_family_color(family: str) -> Tuple[int, int, int]:
 
 @dataclass
 class VisualContext:
-    image: Image.Image
+    image: Optional[Image.Image]
     coords: Dict[str, Dict]
     palette: Dict[Tuple[int, int, int], str]
 
@@ -180,7 +180,7 @@ class VisualDecoder:
         
         # Check for numbered tiles
         pattern = os.path.join(self.tiles_dir, "tiles_*.png")
-        all_matches = sorted(glob.glob(pattern))
+        all_matches = glob.glob(pattern)
         
         # STRICTLY exclude legend files
         tiles = [p for p in all_matches if "_legend" not in os.path.basename(p)]
@@ -189,7 +189,19 @@ class VisualDecoder:
             # Fallback: maybe it's just tiles.png but glob missed it? (Covered above)
             raise FileNotFoundError(f"No tile images found in {self.tiles_dir}")
         
-        return tiles
+        # Natural sort or index-based map for indexed tiles
+        def get_tile_idx(path):
+            name = os.path.basename(path)
+            # Expecting tiles_N.png
+            try:
+                # Remove 'tiles_' and '.png' to get N
+                num_part = name.replace("tiles_", "").split(".")[0]
+                return int(num_part)
+            except:
+                return 999999
+        
+        indexed_tiles = sorted(tiles, key=get_tile_idx)
+        return indexed_tiles
     
     def get_legend_paths(self) -> List[str]:
         """Return paths to all legend images (split or single)."""
@@ -227,29 +239,10 @@ class VisualDecoder:
         self.tile_images_cache: Dict[int, Image.Image] = {}
         self.tile_paths = {i: path for i, path in enumerate(self.atlas_paths)}
         
-        # For backward compatibility, also create stitched image
-        # (used by palette and bulk operations)
-        tile_images = []
-        for tile_path in self.atlas_paths:
-            if not os.path.exists(tile_path): 
-                raise FileNotFoundError(tile_path)
-            tile_images.append(Image.open(tile_path).convert("RGB"))
-        
-        # Stitch tiles vertically (they were split by height)
-        if len(tile_images) == 1:
-            img = tile_images[0]
-            # Cache single tile
-            self.tile_images_cache[0] = img
-        else:
-            total_width = tile_images[0].width
-            total_height = sum(t.height for t in tile_images)
-            img = Image.new("RGB", (total_width, total_height))
-            y_offset = 0
-            for idx, tile in enumerate(tile_images):
-                img.paste(tile, (0, y_offset))
-                self.tile_images_cache[idx] = tile  # Cache each tile
-                y_offset += tile.height
-            print(f"   Stitched {len(tile_images)} tiles -> {total_width}x{total_height}")
+        # We NO LONGER stitch tiles vertically to avoid memory bombs.
+        # Instead, we use lazy loading and per-tile cropping.
+        img = None # No stitched image by default
+        print(f"   Using lazy loading for {len(self.atlas_paths)} tiles")
         
         with open(self.coords_path, 'r') as f:
             coords_list = json.load(f)
@@ -260,13 +253,22 @@ class VisualDecoder:
                 family = item["family"]
                 if family in coords_map:
                     continue  # Skip duplicates from split tiles
+                
+                # Determine tile index (prefer coords, fallback to manifest)
+                tile_idx = item.get("tile_index")
+                if tile_idx is None:
+                    tile_idx = self.family_to_tile.get(family, 0)
+                
                 # Store tile_index in the item for later use
-                item["_tile_index"] = item.get("tile_index", 0)
+                item["_tile_index"] = tile_idx
+                
                 # IMPORTANT: Store the tile-local y BEFORE overwriting with stitched y
                 item["_tile_local_bbox"] = item["bbox"].copy()  # Keep tile-local coords
+                
                 # Overwrite bbox with stitched coords for backward compatibility
                 if "original_y" in item:
                     item["bbox"][1] = item["original_y"]
+                
                 coords_map[family] = item
             
         with open(self.map_path, 'r') as f:
@@ -297,12 +299,16 @@ class VisualDecoder:
         return VisualContext(img, coords_map, palette)
     
     def _get_tile_image(self, tile_index: int) -> Optional[Image.Image]:
-        """Get a specific tile image (lazy loading)."""
+        """Get a specific tile image (lazy loading). Indices are 0-based relative to atlas_paths."""
         if tile_index in self.tile_images_cache:
             return self.tile_images_cache[tile_index]
         
-        if tile_index in self.tile_paths:
-            img = Image.open(self.tile_paths[tile_index]).convert("RGB")
+        # Map 0-based index to tile path
+        # Note: if manifest says tile 0 is tiles_1.png, and atlas_paths is sorted by N, 
+        # then atlas_paths[0] should be tiles_1.png.
+        if 0 <= tile_index < len(self.atlas_paths):
+            path = self.atlas_paths[tile_index]
+            img = Image.open(path).convert("RGB")
             self.tile_images_cache[tile_index] = img
             return img
         
@@ -392,15 +398,19 @@ class VisualDecoder:
         # Determine which tile to use
         tile_index = meta.get("_tile_index", 0)
         
-        # Use per-tile image if available, otherwise use stitched
-        if tile_index in self.tile_images_cache and "_tile_local_bbox" in meta:
-            source_image = self.tile_images_cache[tile_index]
-            # Use tile-local coordinates (NOT stitched y)
+        # Strictly use per-tile image and tile-local coordinates
+        source_image = self._get_tile_image(tile_index)
+        if source_image and "_tile_local_bbox" in meta:
+            # Use tile-local coordinates
             lx, ly, lw, lh = meta["_tile_local_bbox"]
             crop = source_image.crop((lx, ly, lx + lw, ly + lh))
         else:
-            # Fallback to stitched image (uses stitched coordinates)
-            crop = self.context.image.crop((x, y, x + w, y + h))
+            # Fallback (should not happen with regular numbered tiles)
+            # If we somehow don't have tile-local coords but have a stitched image in context
+            if self.context.image:
+                crop = self.context.image.crop((x, y, x + w, y + h))
+            else:
+                return None, []
         
         found_families = set()
         HEADER_H, TILE_SIZE = 24, 16
