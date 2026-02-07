@@ -294,7 +294,7 @@ def extract_usages(file_path: str, source_code: bytes) -> Tuple[List[CallUsage],
                                 dts_info = ext_defs.get(chain)
                     
                     # Hook return analysis (Destructuring)
-                    if chain.startswith("use") and dts_info and dts_info.get("return_type_expanded"):
+                    if dts_info and dts_info.get("return_type_expanded"):
                         parent = node.parent
                         if parent and parent.type == "variable_declarator":
                             name_node = parent.child_by_field_name("name")

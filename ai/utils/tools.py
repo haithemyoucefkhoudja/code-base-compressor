@@ -12,6 +12,10 @@ from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 from PIL import Image, ImageDraw
 import io
+import math
+
+# Disable Image Size Limit for massive datasets
+Image.MAX_IMAGE_PIXELS = None
 
 # Default Configuration (can be overridden via constructor)
 DEFAULT_TILES_DIR = None  # Must be set explicitly
@@ -96,12 +100,22 @@ class VisualDecoder:
     
         registry = {}
     
-        def register(name, src, kind, props, prop_types=None, ret_type=None,variations=None, sig=None, shapes=None):
-            if not name: return
+        self.sub_to_parents = {}
+    
+        def register(name, src, kind, props, prop_types=None, ret_type=None,variations=None, sig=None, shapes=None, subs=None):
+            if not name: return None
             if not src: src = "unknown"
-            key = f"{src}::{name}"
+            
+            # Disambiguate name with kind (Matches tiles.py and VocabularyIndex logic)
+            distinct_name = name
+            if kind == "jsx": distinct_name = f"{name}::JSX"
+            elif kind == "call": distinct_name = f"{name}::CALL"
+            elif kind == "const": distinct_name = f"{name}::CONST"
+            elif kind == "def": distinct_name = f"{name}::DEF"
+            
+            key = f"{src}::{distinct_name}"
             registry[key] = {
-                "name": name, 
+                "name": distinct_name, 
                 "source": src, 
                 "type": kind, 
                 "props": props,
@@ -109,17 +123,40 @@ class VisualDecoder:
                 "return_type": ret_type,
                 "variations": variations,
                 "signature": sig,
-                "shapes": shapes
+                "shapes": shapes,
+                "subs": subs or []
             }
+            return key
             
         for p in data.get("call_patterns", []): 
             sig = p.get('signature') or {}
-            register(p.get("chain"), p.get("source_import"), "call", [], 
+            subs = p.get("sub_patterns", [])
+            hkey = register(p.get("chain"), p.get("source_import"), "call", [], 
                      variations=p.get('call_variations'), 
-                     sig=sig,)
+                     sig=sig,
+                     subs=subs)
+            
+            # Track sub-patterns
+            if hkey:
+                for sub in subs:
+                    skey = register(sub, p.get("source_import"), "call", [])
+                    if skey and skey != hkey:
+                        if skey not in self.sub_to_parents: self.sub_to_parents[skey] = []
+                        if hkey not in self.sub_to_parents[skey]:
+                            self.sub_to_parents[skey].append(hkey)
                      
         for p in data.get("jsx_patterns", []): 
-            register(p.get("component"), p.get("source_import"), "jsx", p.get("common_props"),shapes=p.get('shapes'))
+            subs = p.get("sub_components", [])
+            hkey = register(p.get("component"), p.get("source_import"), "jsx", p.get("common_props"),shapes=p.get('shapes'), subs=subs)
+            
+            # Track sub-components
+            if hkey:
+                for sub in subs:
+                    skey = register(sub, p.get("source_import"), "jsx", [])
+                    if skey and skey != hkey:
+                        if skey not in self.sub_to_parents: self.sub_to_parents[skey] = []
+                        if hkey not in self.sub_to_parents[skey]:
+                            self.sub_to_parents[skey].append(hkey)
                      
         for p in data.get("constant_patterns", []): 
             register(p.get("constant"), p.get("source_import"), "const", [])
@@ -143,16 +180,27 @@ class VisualDecoder:
         
         # Check for numbered tiles
         pattern = os.path.join(self.tiles_dir, "tiles_*.png")
-        tiles = sorted(glob.glob(pattern))
+        all_matches = sorted(glob.glob(pattern))
+        
+        # STRICTLY exclude legend files
+        tiles = [p for p in all_matches if "_legend" not in os.path.basename(p)]
         
         if not tiles:
+            # Fallback: maybe it's just tiles.png but glob missed it? (Covered above)
             raise FileNotFoundError(f"No tile images found in {self.tiles_dir}")
         
         return tiles
     
-    def get_legend_path(self) -> str:
-        """Return path to the legend image."""
-        return os.path.join(self.tiles_dir, "tiles_legend.png")
+    def get_legend_paths(self) -> List[str]:
+        """Return paths to all legend images (split or single)."""
+        pattern = os.path.join(self.tiles_dir, "tiles*legend*.png")
+        legends = sorted(glob.glob(pattern))
+        if not legends:
+            # Fallback path if not found (though glob handles list)
+            fallback = os.path.join(self.tiles_dir, "tiles_legend.png")
+            if os.path.exists(fallback): return [fallback]
+            return []
+        return legends
         
     def _initialize_context(self) -> VisualContext:
         print("👁️ VisualDecoder: Loading Atlas and calibrating palette...")
@@ -415,6 +463,16 @@ class VisualDecoder:
         norm_family = self._normalize_family(family)
         reg_entry = self.registry.get(norm_family) or {}
         
+        # If this is a sub-item, link to parent metadata for richer analysis
+        if not reg_entry.get('props') and norm_family in self.sub_to_parents:
+            # Take first parent as primary context
+            parent_key = self.sub_to_parents[norm_family][0]
+            parent_entry = self.registry.get(parent_key, {})
+            # Merge or surface parent info
+            reg_entry = parent_entry.copy()
+            reg_entry['is_sub_item'] = True
+            reg_entry['parent_key'] = parent_key
+        
         return buf.getvalue(), InspectionResult(
             props=reg_entry.get('props') or [],
             family=family,
@@ -428,10 +486,10 @@ class VisualDecoder:
             signature=reg_entry.get('signature')
         )
 
-    def bulk_inspect(self, families: List[str]) -> Tuple[bytes, List[InspectionResult]]:
+    def bulk_inspect(self, families: List[str]) -> Tuple[List[bytes], List[InspectionResult]]:
         """
-        Bulk inspection - inspect multiple families and return a stitched grid image.
-        Returns (stitched_image_bytes, list of individual results).
+        Bulk inspection - inspect multiple families and return a list of stitched grid images.
+        Returns (list_of_stitched_image_bytes, list of individual results).
         """
         results: List[InspectionResult] = []
         crops: List[Tuple[Image.Image, str]] = []
@@ -448,38 +506,38 @@ class VisualDecoder:
                     crops.append((crop, family))
         
         if not crops:
-            return b"", results
+            return [], results
         
-        # Stitch into grid
-        stitched = self._stitch_grid(crops)
-        buf = io.BytesIO()
-        stitched.save(buf, format='PNG')
+        # Stitch into grid chunks
+        stitched_images = self._stitch_grid(crops)
         
-        return buf.getvalue(), results
+        byte_chunks = []
+        for img in stitched_images:
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            byte_chunks.append(buf.getvalue())
+        
+        return byte_chunks, results
 
-    def _stitch_grid(self, crops: List[Tuple[Image.Image, str]], max_width: int = 2048) -> Image.Image:
+    def _stitch_grid(self, crops: List[Tuple[Image.Image, str]], max_width: int = 10000, max_dimension: int = 10000) -> List[Image.Image]:
         """
-        Create a labeled grid of component crops using BOOKSHELF packing.
-        Packs items horizontally until max_width is reached, then wraps to next row.
+        Create labeled grids of component crops using BOOKSHELF packing.
+        Splits into multiple images if height exceeds max_dimension.
         """
         if not crops:
-            return Image.new("RGB", (100, 100), (40, 44, 52))
+            return [Image.new("RGB", (100, 100), (30, 30, 30))]
         
         PAD = 10
-        LABEL_H = 0  # No labels for now, just visual
         
-        # Shelf packing algorithm
+        # 1. Place items using shelf algorithm (infinite height for now)
         positions = []
         current_x, current_y = PAD, PAD
         row_h = 0
-        total_w, total_h = 0, 0
+        total_w = 0
         
         for crop, label in crops:
             w, h = crop.size
-            
-            # Check if item fits on current row
             if current_x + w + PAD > max_width:
-                # Wrap to next row
                 current_y += row_h + PAD
                 current_x = PAD
                 row_h = 0
@@ -489,20 +547,37 @@ class VisualDecoder:
             row_h = max(row_h, h)
             total_w = max(total_w, current_x)
         
-        total_h = current_y + row_h + PAD
-        total_w = max(total_w, 100)
+        final_h = current_y + row_h + PAD
+        final_w = max(total_w, 100)
         
-        # Create canvas
-        canvas = Image.new("RGB", (total_w, total_h), (30, 30, 30))
-        draw = ImageDraw.Draw(canvas)
+        # 2. Split into multiple tiles if needed (copying tiles.py logic)
+        num_tiles = math.ceil(final_h / max_dimension)
+        tiles = []
         
-        # Paste crops with borders
-        for crop, x, y, label in positions:
-            # Draw border
-            draw.rectangle([x-2, y-2, x+crop.width+2, y+crop.height+2], outline=(80, 80, 80))
-            canvas.paste(crop, (x, y))
-        
-        return canvas
+        for tile_idx in range(num_tiles):
+            y_start = tile_idx * max_dimension
+            y_end = min((tile_idx + 1) * max_dimension, final_h)
+            tile_h = y_end - y_start
+            
+            tile_canvas = Image.new("RGB", (final_w, tile_h), (30, 30, 30))
+            
+            for img, x, y, label in positions:
+                item_h = img.height
+                item_y_end = y + item_h
+                
+                # If item overlaps with this tile's vertical slab
+                if item_y_end > y_start and y < y_end:
+                    paste_y = max(0, y - y_start)
+                    crop_top = max(0, y_start - y)
+                    crop_bottom = min(item_h, y_end - y)
+                    
+                    if crop_bottom > crop_top:
+                        cropped_img = img.crop((0, crop_top, img.width, crop_bottom))
+                        tile_canvas.paste(cropped_img, (x, paste_y))
+            
+            tiles.append(tile_canvas)
+            
+        return tiles
 
 
 # --- Tool 2: Composer (The Artist) ---
@@ -516,17 +591,17 @@ class Composer:
     def add_thought(self, image: Image.Image, label: str):
         self.crops.append((image, label))
 
-    def compose(self, output_path: str):
+    def compose(self, output_path: str, max_dimension: int = 10000):
         print(f"🎨 Composer: Stitching {len(self.crops)} visual thoughts...")
         if not self.crops: 
             return
 
         # Shelf Algorithm
-        MAX_WIDTH = 2048 
+        MAX_WIDTH = max_dimension 
         positions = []
         current_x, current_y = 0, 0
         row_h = 0
-        total_w, total_h = 0, 0
+        total_w = 0
         PAD = 20
         
         for img, label in self.crops:
@@ -541,25 +616,45 @@ class Composer:
             row_h = max(row_h, h)
             total_w = max(total_w, current_x)
             
-        total_h = current_y + row_h + PAD
-        total_w = max(total_w + 200, 1024)
+        final_h = current_y + row_h + PAD
+        final_w = max(total_w + 200, 1024)
 
-        canvas = Image.new("RGB", (total_w, total_h),0)
-        draw = ImageDraw.Draw(canvas)
+        need_split = final_h > max_dimension
+        base_name = output_path.replace(".png", "")
         
-        # try: 
-        #     font = ImageFont.truetype(FONT_PATH, 20)
-        # except: 
-        #     font = ImageFont.load_default()
-
-        for img, x, y, label in positions:
-            draw.rectangle([x-2, y-2, x+img.width+2, y+img.height+2], fill=(20,20,20))
-            canvas.paste(img, (x, y))
-            # draw.text((x, y - 25), label, fill=(200, 200, 200), font=font)
-            
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        canvas.save(output_path)
-        print(f"✅ Final Composition saved: {output_path}")
+        if not need_split:
+            canvas = Image.new("RGB", (final_w, final_h), 0)
+            for img, x, y, label in positions:
+                canvas.paste(img, (x, y))
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            canvas.save(output_path)
+            print(f"✅ Final Composition saved: {output_path}")
+        else:
+            num_tiles = math.ceil(final_h / max_dimension)
+            print(f"Splitting trace into {num_tiles} tiles...")
+            for tile_idx in range(num_tiles):
+                y_start = tile_idx * max_dimension
+                y_end = min((tile_idx + 1) * max_dimension, final_h)
+                tile_h = y_end - y_start
+                
+                tile_canvas = Image.new("RGB", (final_w, tile_h), 0)
+                
+                for img, x, y, label in positions:
+                    item_h = img.height
+                    item_y_end = y + item_h
+                    
+                    if item_y_end > y_start and y < y_end:
+                        paste_y = max(0, y - y_start)
+                        crop_top = max(0, y_start - y)
+                        crop_bottom = min(item_h, y_end - y)
+                        
+                        if crop_bottom > crop_top:
+                            cropped_img = img.crop((0, crop_top, img.width, crop_bottom))
+                            tile_canvas.paste(cropped_img, (x, paste_y))
+                
+                tile_path = f"{base_name}_{tile_idx + 1}.png"
+                tile_canvas.save(tile_path)
+                print(f"  Saved trace tile: {tile_path}")
 
 
 # --- Tool 3: Vocabulary Index ---
@@ -591,12 +686,23 @@ class VocabularyIndex:
         else:
             self.flat_vocab = []
 
-        def register(name, src, kind, props, prop_types=None, ret_type=None,variations=None, sig=None, shapes=None):
-            if not name: return
+        self.sub_to_parents = {}
+
+        def register(name, src, kind, props, prop_types=None, ret_type=None,variations=None, sig=None, shapes=None, subs=None):
+            if not name: return None
             if not src: src = "unknown"
-            key = f"{src}::{name}"
+            
+            # Disambiguate name with kind (Matches tiles.py logic)
+            distinct_name = name
+            if kind == "jsx": distinct_name = f"{name}::JSX"
+            elif kind == "call": distinct_name = f"{name}::CALL"
+            elif kind == "const": distinct_name = f"{name}::CONST"
+            elif kind == "def": distinct_name = f"{name}::DEF"
+            
+            key = f"{src}::{distinct_name}"
+            
             registry[key] = {
-                "name": name, 
+                "name": distinct_name, 
                 "source": src, 
                 "type": kind, 
                 "props": props,
@@ -604,17 +710,40 @@ class VocabularyIndex:
                 "return_type": ret_type,
                 "variations": variations,
                 "signature": sig,
-                "shapes": shapes
+                "shapes": shapes,
+                "subs": subs or []
             }
+            return key
             
         for p in data.get("call_patterns", []): 
             sig = p.get('signature') or {}
-            register(p.get("chain"), p.get("source_import"), "call", [], 
+            subs = p.get("sub_patterns", [])
+            hkey = register(p.get("chain"), p.get("source_import"), "call", [], 
                      variations=p.get('call_variations'), 
-                     sig=sig,)
+                     sig=sig,
+                     subs=subs)
+            
+            # Track sub-patterns
+            if hkey:
+                for sub in subs:
+                    skey = register(sub, p.get("source_import"), "call", [])
+                    if skey and skey != hkey:
+                        if skey not in self.sub_to_parents: self.sub_to_parents[skey] = []
+                        if hkey not in self.sub_to_parents[skey]:
+                            self.sub_to_parents[skey].append(hkey)
                      
         for p in data.get("jsx_patterns", []): 
-            register(p.get("component"), p.get("source_import"), "jsx", p.get("common_props"),shapes=p.get('shapes'))
+            subs = p.get("sub_components", [])
+            hkey = register(p.get("component"), p.get("source_import"), "jsx", p.get("common_props"),shapes=p.get('shapes'), subs=subs)
+            
+            # Track sub-components
+            if hkey:
+                for sub in subs:
+                    skey = register(sub, p.get("source_import"), "jsx", [])
+                    if skey and skey != hkey:
+                        if skey not in self.sub_to_parents: self.sub_to_parents[skey] = []
+                        if hkey not in self.sub_to_parents[skey]:
+                            self.sub_to_parents[skey].append(hkey)
                      
         for p in data.get("constant_patterns", []): 
             register(p.get("constant"), p.get("source_import"), "const", [])
@@ -628,9 +757,8 @@ class VocabularyIndex:
         
         self.registry = registry
         
-        # Combine registry keys with flat vocab
-        self.vocab = list(set(list(registry.keys()) + self.flat_vocab))
-        print(f"📚 Vocabulary loaded: {len(self.vocab)} families ({len(registry)} rich)")
+        self.vocab = list(self.flat_vocab)
+        print(f"📚 Vocabulary loaded: {len(self.vocab)}")
         
     def get_all(self) -> List[str]:
         """Return full vocabulary."""
@@ -653,9 +781,9 @@ class VocabularyIndex:
         # Create a mapping of {name: full_family} for candidates
         name_map = {}
         for v in self.vocab:
-            if '::' in v:
-                _, name = v.split('::', 1)
-                name = name.strip()
+            parts = v.split('::')
+            if len(parts) > 1:
+                name = parts[1].strip()
                 if name not in name_map:
                     name_map[name] = []
                 name_map[name].append(v)
@@ -676,4 +804,16 @@ class VocabularyIndex:
             fuzzy_full = difflib.get_close_matches(query, candidates, n=remaining, cutoff=cutoff)
             matches.extend(fuzzy_full)
         
-        return matches[:limit]
+        # 3. Expand with parent patterns and prefer them
+        final_results = []
+        for m in matches:
+            # If this is a sub-item, try to include the parent INSTEAD or BEFORE
+            if m in self.sub_to_parents:
+                for p_key in self.sub_to_parents[m]:
+                    if p_key not in final_results:
+                        final_results.append(p_key)
+            else:
+                if m not in final_results:
+                    final_results.append(m)
+        
+        return final_results[:limit]

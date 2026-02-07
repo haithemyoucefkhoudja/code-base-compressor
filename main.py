@@ -1,20 +1,37 @@
-
-from ast import List
-from analyzer.abstract import AbstractGenerator
 import os
 import glob
 import json
 import argparse
+import tiktoken
 from analyzer.config import PATTERNS
 from analyzer.extractors.usages import extract_usages
-from analyzer.models import TypeDefinition
 from analyzer.processing.aggregators import group_and_filter
 from analyzer.processing.cleaning import clean_call_patterns, clean_jsx_patterns, clean_constant_patterns
+
+def count_tokens(files, model="gpt-4", exclude_dts=False):
+    """Count the total number of tokens in the given files using tiktoken."""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    
+    total_tokens = 0
+    for file_path in files:
+        if exclude_dts and file_path.endswith(".d.ts"):
+            continue
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+                total_tokens += len(encoding.encode(content))
+        except Exception as e:
+            print(f"Error counting tokens for {file_path}: {e}")
+    return total_tokens
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze a codebase for call and JSX patterns.")
     parser.add_argument("--path", default="repo", help="The path to the repository to analyze.")
     parser.add_argument("--output", help="The path to save the output JSON file. Defaults to <reponame>_patterns.json")
+    parser.add_argument("--exclude-dts", action="store_true", help="Exclude .d.ts files from analysis and token count.")
     args = parser.parse_args()
 
     target_repo_path = args.path
@@ -29,11 +46,22 @@ def main():
     print(f"Target: {os.path.abspath(target_repo_path)}")
 
     # 1. Scan Files
-    files = []
+    all_raw_files = []
     for pattern in PATTERNS:
-        files.extend(glob.glob(os.path.join(target_repo_path, pattern), recursive=True))
+        all_raw_files.extend(glob.glob(os.path.join(target_repo_path, pattern), recursive=True))
 
-    files = [f for f in files if "node_modules" not in f and ".next" not in f]
+    files = [
+        f for f in all_raw_files 
+        if "node_modules" not in f and ".next" not in f
+    ]
+    
+    if args.exclude_dts:
+        files = [f for f in files if not f.endswith(".d.ts")]
+    
+    # Count tokens
+    print(f"Counting tokens in {len(files)} files...")
+    total_tokens = count_tokens(files, exclude_dts=args.exclude_dts)
+    print(f"Total tokens in repository: {total_tokens:,}")
     
     all_calls = []
     all_jsxs = []
@@ -109,14 +137,14 @@ def main():
     # for p in cleaned_components: raw_vocab.add(p["component"])
     # raw_vocab.update(definitions.keys())
 
-    abstractor = AbstractGenerator(raw_vocab, definitions)
+    # abstractor = AbstractGenerator(raw_vocab, definitions)
     print(f"Abstracting with {len(raw_vocab)} vocabulary terms and {len(definitions)} definitions...")
 
     # 3. Process
     
     for comp in cleaned_components:
         forms = set()
-        sig = abstractor.generate(comp.code)
+        sig = comp.code
         if sig: forms.add(sig)
         comp.abstract_forms = sorted(list(forms))
         del comp.code
@@ -131,7 +159,7 @@ def main():
             if examples is None:
                 raise ValueError(f"Examples not found for item: {item}")
             for ex in examples:
-                sig = abstractor.generate(ex)
+                sig = ex
                 if sig: forms.add(sig)
             
             item["abstract_forms"] = sorted(list(forms))

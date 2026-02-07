@@ -1,342 +1,425 @@
-
 import os
 import json
 import logging
 import base64
 import io
+import dataclasses
 import PIL.Image
-from typing import List, Dict
+import sys
+from typing import Any, List, Dict, Set
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 
-from utils.state import ResearchState,  ResearchPlan
+from utils.state import ResearchState, ResearchPlan, DiscoveryResult
 from utils.tools import VisualDecoder, VocabularyIndex, Composer
-
 from utils.cost import CostTracker
 
 logger = logging.getLogger(__name__)
 
 # --- System Prompts ---
-
 ORCHESTRATOR_PROMPT = """
-### SYSTEM ROLE: The Codebase Architect (Visual Orchestrator)
+### SYSTEM ROLE: Principal Codebase Navigator (The Cartographer)
+You are an expert Software Architect with access to a **Visual Atlas** (Global Code Map) and a **Symbol Index** (Vocabulary).
 
-You are the Principal Architect. You have access to a **Visual Atlas** of the codebase (screenshots of all components).
-Your goal is to plan a specific implementation by inspecting relevant components.
+### OBJECTIVE:
+Translate the User's High-Level Request into concrete **Logical Entry Points**.
+You must identify WHICH specific functions, classes, or constants in the codebase serve as the "Root Nodes" for the requested feature.
 
-### INPUT DATA
-1. **The Vocabulary:** A list of all available component families.
-2. **The Atlas:** Visual snapshots of the UI.
+### INPUT DATA:
+1. **User Request:** The feature or logic to investigate.
+2. **Visual Atlas:** Screenshots of the codebase folder structure and key files. Use this to locate the relevant "Neighborhood" (e.g., `src/auth`, `backend/api`).
+3. **Vocabulary List:** A strict list of available code symbols (Format: `symbolName::filename`).
 
-### TASK
-Given the User Query and the Visual Atlas, determine WHICH components need to be visually inspected to understand the implementation details.
-1. Look at the Atlas to find relevant UI sections.
-2. Cross-reference with the Vocabulary List.
-3. Select up to 10 key components that are likely involved in the requested feature.
+### INSTRUCTIONS:
+1. **Locate:** Use the Atlas to find the correct module/directory.
+2. **Select:** Pick the specific symbols from the Vocabulary that start the execution flow (e.g., the main API handler, the root component, the config loader).
+3. **Output:** A `ResearchPlan` containing only valid symbols from the Vocabulary.
+"""
+
+DEEP_INSPECTOR_PROMPT = """
+### SYSTEM ROLE: Recursive Static Analysis Engine (High-Fidelity Code Reconstruction)
+You are a senior specialized code auditor. Your primary directive is to **RECONSTRUCT SOURCE CODE** from visual source images. You are NOT allowed to simply "point" to files or summarize their purpose.
+
+### OBJECTIVE:
+- **LITERAL RECONSTRUCTION (CRITICAL):** You must transcribe exact code snippets, variable names, function signatures, and logic blocks from the "Source Code Image". 
+- **LOGIC DECODING:** Explain exactly HOW the code achieves its task. (e.g., "The `createSession` function takes a `userId`, generates a 32-char token using `crypto.randomBytes`, and writes it to KV with a 30-day TTL.")
+- **TRACEABLE CALL GRAPH:** Every internal dependency you identify MUST be mapped to the **VOCABULARY LIST**.
+
+### PROCESS:
+1. **VISUAL EXTRACTION:** 
+   - Identify specific functions/variables in the image.
+   - For each critical one, **WRITE DOWN THE ACTUAL CODE** or a very high-fidelity pseudo-code if the image is slightly blurry.
+   - Identify the exact arguments, return types, and library calls.
+
+2. **SYMBOL LINKING:** 
+   - Check every dependency against the **VOCABULARY LIST**.
+   - **IF FOUND:** Queue it via `DiscoveryResult(status="SEARCH_CONTINUE")`.
+   - **IF NOT FOUND:** Document it in the commentary as an external/primitive dependency.
+
+### OUTPUT FORMAT:
+You must provide a response with the following sections:
+
+1. **CODE RECONSTRUCTION:** 
+   - Transcribe the exact logic for all database connections, schema definitions, or session logic found in the image.
+   - Example: ```typescript \n export const userTable = sqliteTable('user', { id: text('id').primaryKey() }) \n ```
+
+2. **LOGIC FLOW & STATE TRACING:** 
+   - Describe the data path. What enters the function? What leaves it? Which global constants are accessed?
+
+3. **TOOL CALL:** 
+   - Use `DiscoveryResult` to define next steps.
+
+**STRICT RULE:** If your commentary is just a list of "I see file X. It handles Y," you have FAILED. Give me the code.
 """
 
 SYNTHESIZER_PROMPT = """
-### SYSTEM ROLE: Implementation Planner
-You are finalizing the implementation plan based on visual inspections.
-Analyze the component details and creating a step-by-step implementation plan.
-"""
+### SYSTEM ROLE: Technical Lead & Implementation Architect
+You are the architect responsible for synthesizing a **Technical Implementation Plan** from high-fidelity code reconstructions.
 
-# --- Node Class ---
+### INPUT:
+A **Dependency Trace Log** containing:
+1. **CODE RECONSTRUCTIONS:** Literal extracts and logic flows decoded from source code images.
+2. **METADATA:** File paths and symbol associations.
+
+### TASK:
+Generate a definitive **Markdown Implementation Plan** that:
+1. **Architecture Overview:** Explain the high-level design of the relevant sub-systems.
+2. **Logic Transcription & Analysis:** Include the reconstructed code blocks you received in the trace. Focus on the parts that need changing.
+3. **GRANULAR MIGRATION GUIDE:** 
+   - For every file involved, specify WHAT needs to change with **EXACT CODE EXAMPLES**.
+   - Use the variable names, constants, and function signatures found in the trace.
+   - Example: "In `src/db/index.ts`, replace the `getDB` initialization logic. Change parameter of `MongoClient` from `string` to the `MONGODB_URI` env var found in the config."
+4. **Step-by-Step Execution Plan:** Provide a clear order of operations for the migration.
+
+### CONSTRAINTS:
+- **STRICT GROUNDING:** Only use information from the trace. If a detail is missing, state it.
+- **ZERO HALLUCINATION:** Do not invent functions, types, or files.
+- **TECHNICAL SPECIFICITY:** Use the exact code patterns provided to build your report.
+- **NO PLACEHOLDERS:** Avoid "update logic accordingly". Instead, say "change `a.value` to `b.value`".
+"""
 
 class Nodes:
     def __init__(self, llm, tools_config: Dict):
-        """
-        Initialize nodes with necessary resources.
-        tools_config should contain 'tiles_dir'.
-        """
         self.llm = llm
         self.tiles_dir = tools_config["tiles_dir"]
         
-        # Initialize Tools
+        # Tools
         self.decoder = VisualDecoder(self.tiles_dir)
-        self.vocab_index = VocabularyIndex(self.tiles_dir)
+        self.vocab_index = VocabularyIndex(self.tiles_dir) 
         self.composer = Composer()
-        self.legend_path = self.decoder.get_legend_path()
+        self.legend_paths = self.decoder.get_legend_paths()
         self.output_dir = tools_config.get("output_dir", "ai/output")
         self.gen_dir = os.path.join(self.output_dir, "generation")
         os.makedirs(self.gen_dir, exist_ok=True)
         self.stitch_count = 0
         
-        # Load Visual Context
+        # Cost Tracking
+        cost_log_path = os.path.join(self.gen_dir, "cost_details.log")
+        CostTracker().set_log_path(cost_log_path)
+        
         self._load_visual_context()
 
     def _load_visual_context(self):
-        """Pre-load visual assets as Base64."""
-        logger.info("🖼️ Loading visual assets...")
+        """Pre-load visual assets."""
         self.atlas_b64_list = []
         for atlas_path in self.decoder.atlas_paths:
             with open(atlas_path, 'rb') as f:
                 b64 = base64.b64encode(f.read()).decode('utf-8')
                 self.atlas_b64_list.append(b64)
         
-        if os.path.exists(self.legend_path):
-            with open(self.legend_path, 'rb') as f:
-                self.legend_b64 = base64.b64encode(f.read()).decode('utf-8')
-        else:
-            self.legend_b64 = ""
+        self.legend_b64_list = []
+        for lp in self.legend_paths:
+            if os.path.exists(lp):
+                with open(lp, 'rb') as f:
+                    self.legend_b64_list.append(base64.b64encode(f.read()).decode('utf-8'))
 
-    # --- Node Implementations ---
-
-    def planner_node(self, state: ResearchState):
-        logger.info("🧠 PLANNER: Generating inspection plan...")
+    # --- HELPER: The "Shotgun" Resolver ---
+    def _resolve_queries(self, queries: List[str]) -> List[str]:
+        """
+        Takes LLM 'guesses' and finds ALL matching vocabulary keys using broad search.
+        Stitches everything found.
+        """
+        resolved = set()
+        for q in queries:
+            # SEARCH: Broad search to catch everything
+            matches = self.vocab_index.search(q, limit=2, cutoff=0.5)
+            
+            if matches:
+                logger.info(f"   🔍 Query '{q}' -> Found {len(matches)} matches.")
+                for m in matches:
+                    resolved.add(m)
+            else:
+                logger.warning(f"   🚫 Query '{q}' -> NO matches found.")
         
+        return list(resolved)
+
+    # --- PLANNER NODE ---
+    def planner_node(self, state: ResearchState):
+        logger.info("🧠 PLANNER: Generating Concept Search...")
+        
+        # 1. Get Full Vocabulary
         vocabulary = self.vocab_index.get_all()
         vocab_str = json.dumps(vocabulary)
         
-        messages = [
+        messages: List[BaseMessage] = [
             SystemMessage(content=ORCHESTRATOR_PROMPT),
             HumanMessage(content=[
                 {"type": "text", "text": f"### USER REQUEST\n{state['topic']}\n"},
-                {"type": "text", "text": f"### VOCABULARY LIST\n{vocab_str}\n"}
+                {"type": "text", "text": f"### FULL VOCABULARY LIST\n{vocab_str}\n"},
+                {"type": "text", "text": "Select the initial entry points from the list above."}
             ])
         ]
         
-        # Add Visual Context
+        # Atlas Context
         for i, b64 in enumerate(self.atlas_b64_list):
-            messages[0].content += f"\n[Accessing Visual Context Tile {i+1}]"
             messages.append(HumanMessage(content=[
-                {"type": "text", "text": f"### VISUAL CONTEXT: ATLAS TILE {i+1}"},
+                {"type": "text", "text": f"### ATLAS TILE {i+1}"},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
             ]))
-            
-        if self.legend_b64:
+
+        # RESTORED: Legend Context
+        for i, lb64 in enumerate(self.legend_b64_list):
+            suffix = f" {i+1}" if len(self.legend_b64_list) > 1 else ""
             messages.append(HumanMessage(content=[
-                {"type": "text", "text": "### VISUAL CONTEXT: COMPONENT LEGEND"},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{self.legend_b64}"}}
+                {"type": "text", "text": f"### VISUAL LEGEND{suffix} (Syntax Key)"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{lb64}"}}
             ]))
-        
-        # Structured Output
+            
         structured_llm = self.llm.with_structured_output(ResearchPlan)
         try:
             plan = structured_llm.invoke(messages)
-            logger.info(f"📋 Plan: {len(plan.targets)} targets identified.")
             
-            # INITIALIZE RECURSION STATE
-            # We treat the initial plan targets as the first batch of "pending targets"
-            initial_targets = [t.family for t in plan.targets]
-            
+            # 1. Take LLM Choices
+            raw_queries = [t.family for t in plan.targets]
+            logger.info(f"🤖 Planner Selected: {raw_queries}")
+
+            # 2. EXPLODE them into concrete files (Shotgun)
+            expanded_targets = self._resolve_queries(raw_queries)
+            logger.info(f"📋 Expanded into {len(expanded_targets)} concrete files.")
+
             return {
                 "plan": plan, 
-                "pending_targets": initial_targets,
+                "pending_targets": expanded_targets, 
                 "visited_targets": []
             }
         except Exception as e:
             logger.error(f"Planner failed: {e}")
             return {"plan": ResearchPlan(targets=[], strategy="Planning Failed"), "pending_targets": []}
 
-    # --- Batch Node Implementation (Recursive) ---
+    # --- RECURSIVE INSPECTOR NODE ---
 
     def bulk_inspector_node(self, state: ResearchState):
         """
-        Processes the CURRENT batch of 'pending_targets'.
-        This node does ONE pass: Stitch -> Analyze -> Discover Next.
-        The Graph handles the recursion if 'pending_targets' is non-empty.
+        The 'Shotgun' Inspector.
         """
-        targets = state.get("pending_targets", [])
-        
-        # Filter out already visited (Dedup)
-        # Note: In Graph state, 'visited_targets' accumulates. 
-        # But we need to check if the *current* targets have been visited.
-        # However, logic downstream should prevent adding visited to pending. 
-        # We'll double check here to be safe.
-        already_visited = list(state.get("visited_targets", []))
-        
-        current_batch = [t for t in targets if t not in already_visited]
-        
-        if not current_batch:
-            logger.info("🕵️ Inspector: No new targets to inspect (all visited).")
-            return {"pending_targets": []} # Clear pending to stop recursion
-            
-        logger.info(f"🕵️ BULK INSPECTOR: Processing batch of {len(current_batch)}: {current_batch}")
-        
-        # 1. Bulk Stitching (One Image)
-        stitched_bytes, results = self.decoder.bulk_inspect(current_batch)
-        
-        if not stitched_bytes:
-            return {"inspection_results": ["⚠️ Batch produced no image."], "pending_targets": []}
-            
-        # SAVE STITCHED IMAGE
-        self.stitch_count += 1
-        stitch_filename = f"bulk_stitch_{self.stitch_count}.png"
-        stitch_path = os.path.join(self.gen_dir, stitch_filename)
-        with open(stitch_path, "wb") as f:
-            f.write(stitched_bytes)
-        logger.info(f"💾 Saved stitched image: {stitch_path}")
-
-        self.composer.add_thought(PIL.Image.open(io.BytesIO(stitched_bytes)), f"Batch {self.stitch_count}")
-        
-        # 2. Analyze Batch
-        b64 = base64.b64encode(stitched_bytes).decode('utf-8')
-        import dataclasses
-        results_json = json.dumps([dataclasses.asdict(r) for r in results], indent=2)
-
-        analysis_prompt = f"""### COMPONENT ANALYSIS (Batch {self.stitch_count})
-The components are: {json.dumps(current_batch)}
-
-GOAL: Extract specific implementation details to answer the user request: "{state['topic']}"
-
-For EACH component:
-1. Identify it.
-2. Analyze its Props, State, and Dependencies.
-3. Check for any missing child components or imports.
-"""
-        messages = [
-            SystemMessage(content="You are a strict Code Auditor. Use temperature=0.0."),
-            HumanMessage(content=[
-                {"type": "text", "text": analysis_prompt},
-                {"type": "text", "text": f"### METADATA:\n{results_json}"},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-            ])
-        ]
-        
-        # Main Analysis
-        response = self.llm.bind(temperature=0.0).invoke(messages)
-        CostTracker().track_response(response)
-        analysis_text = response.content
-        
-        # Log
-        log_path = os.path.join(self.gen_dir, "analysis_log.txt")
-        # Initialize log if first run
-        if self.stitch_count == 1:
-             with open(log_path, "w", encoding="utf-8") as f: f.write("--- Analysis Log ---\n")
-             
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"\n=== BATCH {self.stitch_count} ({len(current_batch)} items) ===\n{analysis_text}\n")
-            
-        # 3. Discovery Tool (Next Steps)
-        discovery_prompt = """
-### DISCOVERY STEP
-Based on the analysis, are there **missing components** we need to inspect?
-Use the tool to either complete the search or queue more targets.
-"""
-        messages.append(HumanMessage(content=analysis_text))
-        messages.append(HumanMessage(content=discovery_prompt))
-        
-        from utils.state import DiscoveryResult
-        tool_llm = self.llm.bind_tools([DiscoveryResult], tool_choice="DiscoveryResult")
-        
-        next_targets = []
         try:
-             discovery_response = tool_llm.bind(temperature=0.0).invoke(messages)
-             CostTracker().track_response(discovery_response)
-             
-             if discovery_response.tool_calls:
-                 args = discovery_response.tool_calls[0]['args']
-                 result = DiscoveryResult(**args)
-                 
-                 log_msg = f"Tool: {result.status}, New: {result.new_targets}"
-                 with open(log_path, "a", encoding="utf-8") as f: f.write(f"\n>>> {log_msg}\n")
-                 
-                 if result.status == "SEARCH_CONTINUE":
-                      # Filter: Don't re-queue what we just visited or have visited
-                      for t in result.new_targets:
-                          if t and t not in already_visited and t not in current_batch:
-                              next_targets.append(t)
-                              
-                 logger.info(f"⏭️ Next Targets: {next_targets}")
-                 
-        except Exception as e:
-            logger.error(f"Discovery failed: {e}")
+            targets = state.get("pending_targets", [])
+            already_visited = list(state.get("visited_targets", []))
             
-        return {
-            "inspection_results": [f"### Batch {self.stitch_count}\n{analysis_text}"],
-            "visited_targets": current_batch,
-            "pending_targets": next_targets # REPLACES pending with the new batch
-        }
+            # 1. Deduplicate
+            current_batch = list(set([t for t in targets if t not in already_visited]))
+            
+            if not current_batch:
+                logger.info("🛑 INSPECTOR: Queue empty.")
+                return {"pending_targets": []}
+                
+            logger.info(f"⛏️  STITCHING {len(current_batch)} FILES")
+            logger.info(f"📦 BATCHES \n {current_batch} \n")
+            # 2. Stitch EVERYTHING found (Now returns list of chunks)
+            image_chunks, results = self.decoder.bulk_inspect(current_batch)
+            if not image_chunks:
+                return {"inspection_results": ["⚠️ Error reading code."], "pending_targets": []}
+                
+            self.stitch_count += 1
+            self._save_stitch(image_chunks, self.stitch_count)
 
-    def assign_workers(self, state: ResearchState):
-        pass 
+            # 3. Prepare Context
+            results_json = json.dumps([dataclasses.asdict(r) for r in results], indent=2)
+            
+            # Get Full Vocabulary Again
+            vocabulary = self.vocab_index.get_all()
+            vocab_str = json.dumps(vocabulary)
+            
+            messages: List[BaseMessage] = [SystemMessage(content=DEEP_INSPECTOR_PROMPT)]
 
+            # Atlas Context
+            for i, atlas_b64 in enumerate(self.atlas_b64_list):
+                messages.append(HumanMessage(content=[
+                    {"type": "text", "text": f"### GLOBAL ATLAS {i+1}"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{atlas_b64}"}}
+                ]))
+
+            # RESTORED: Legend Context
+            for i, lb64 in enumerate(self.legend_b64_list):
+                suffix = f" {i+1}" if len(self.legend_b64_list) > 1 else ""
+                messages.append(HumanMessage(content=[
+                    {"type": "text", "text": f"### VISUAL LEGEND{suffix} (Syntax Key)"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{lb64}"}}
+                ]))
+
+            analysis_prompt = f"""### TRACE STEP #{self.stitch_count}
+I have stitched and provided the source code images for: {current_batch}.
+
+**USER MISSION:** "{state['topic']}"
+
+**INSTRUCTIONS FOR THIS STEP:**
+1. **DECODE THE IMAGES:** Literally transcribe the code for schemas, connections, and logic.
+2. **BE TECHNICAL:** I don't want summaries. I want variable names, logic paths, and implementation details.
+3. **CROSS-REFERENCE:** Map your findings to the **VOCABULARY LIST**.
+4. **QUEUE:** List the **Names** of missing internal dependencies you need to see next to complete the migration plan.
+"""
+            results_content: List[Dict[str, Any]] = [
+                {"type": "text", "text": f"### FULL VOCABULARY LIST\n{vocab_str}\n"},
+                {"type": "text", "text": analysis_prompt},
+                {"type": "text", "text": f"### SEARCH RESULTS METADATA\n{results_json}"},
+                {"type": "text", "text": "### SEARCH RESULTS IMAGE(S)"}
+            ]
+
+            # Append all stitched chunks
+            for chunk in image_chunks:
+                b64_chunk = base64.b64encode(chunk).decode('utf-8')
+                results_content.append({
+                    "type": "image_url", 
+                    "image_url": {"url": f"data:image/png;base64,{b64_chunk}"}
+                })
+
+            messages.append(HumanMessage(content=results_content))
+
+            # 4. Invoke LLM with Continuation Logic
+            tool_llm = self.llm.bind_tools([DiscoveryResult])
+            
+            full_analysis = ""
+            current_messages = messages.copy()
+            max_continuations = 3
+            
+            response = None
+            for i in range(max_continuations + 1):
+                response = tool_llm.invoke(current_messages)
+                CostTracker().track_response(response, current_messages)
+                
+                # Check for reasoning content (common in Together/Deepseek models via LangChain)
+                reasoning = getattr(response, "reasoning_content", None)
+                if reasoning:
+                    full_analysis += f"\n\n<thought>\n{reasoning}\n</thought>\n\n"
+                
+                content = response.content if response.content else ""
+                full_analysis += content
+                
+                # Check if we should continue (often indicated by finish_reason or open code blocks)
+                # finish_reason is model-specific, but 'length' is common
+                finish_reason = response.response_metadata.get("finish_reason")
+                
+                if finish_reason == "length" or (content.count("```") % 2 != 0):
+                    logger.info(f"🔄 Truncation detected (reason: {finish_reason}). Requesting continuation...")
+                    current_messages.append(AIMessage(content=content))
+                    current_messages.append(HumanMessage(content="CONTINUE YOUR ANALYSIS. You were cut off. Pick up exactly where you left off, continuing any code blocks or sentences."))
+                    continue
+                else:
+                    break
+
+            next_targets = []
+            analysis_text = full_analysis if full_analysis else "Analysis performed via tool."
+            
+            if response and response.tool_calls:
+                args = response.tool_calls[0]['args']
+                result = DiscoveryResult(**args)
+                
+                logger.info(f"🤖 AI STATUS: {result.status}")
+                
+                if result.status == "SEARCH_CONTINUE":
+                    raw_queries = result.new_targets
+                    logger.info(f"🤔 AI Searching for: {raw_queries}")
+                    
+                    # --- THE EXPLOSION STEP ---
+                    # Take LLM guesses -> Search Vocab -> Queue ALL Matches
+                    next_targets = self._resolve_queries(raw_queries)
+                    
+                elif result.status == "SEARCH_COMPLETE":
+                    logger.info("✅ DONE.")
+                    next_targets = []
+                
+                # Append status to analysis if available
+                analysis_text += f"\n\n**Status:** {result.status}"
+                
+            self._log_analysis(self.stitch_count, current_batch, analysis_text)
+
+            return {
+                "inspection_results": [f"### Trace Layer {self.stitch_count}\n{analysis_text}"],
+                "visited_targets": current_batch, # Mark these specific files as visited
+                "pending_targets": next_targets   # Pass the NEW concrete files
+            }
+            
+        except KeyboardInterrupt:
+            print("\n\n🚨 USER INTERRUPT (Ctrl+C) 🚨")
+            return {
+                "inspection_results": [f"### INTERRUPTED AT LAYER {self.stitch_count}"],
+                "pending_targets": [] 
+            }
+
+    # --- SYNTHESIZER NODE ---
     def synthesizer_node(self, state: ResearchState):
-        logger.info("🔬 SYNTHESIZER: Compiling final report...")
+        logger.info("🔬 SYNTHESIZER: Writing Report...")
         
-        results = "\n\n".join(state["inspection_results"]) or "No inspection results."
+        results = "\n\n".join(state["inspection_results"])
         
-        messages = [
+        # 1. Get Full Vocabulary
+        vocabulary = self.vocab_index.get_all()
+        vocab_str = json.dumps(vocabulary)
+        
+        messages: List[BaseMessage] = [
             SystemMessage(content=SYNTHESIZER_PROMPT),
             HumanMessage(content=f"### USER REQUEST\n{state['topic']}"),
-            HumanMessage(content=f"### INSPECTION RESULTS\n{results}"),
-            HumanMessage(content="Generate a detailed Markdown implementation plan now.")
+            HumanMessage(content=f"### FULL VOCABULARY LIST\n{vocab_str}"),
+            HumanMessage(content=f"### TRACE LOGS\n{results}"),
+            HumanMessage(content="Generate the Final Implementation Plan. Ground your plan strictly in the provided vocabulary and trace logs.")
         ]
         
-        full_content = ""
+        full_report = ""
+        current_messages = messages.copy()
+        max_continuations = 5 # Higher limit for the final report
         
-        # Max continuation loops to prevent infinite loops (e.g. 5)
-        for _ in range(5):
-            response = self.llm.invoke(messages)
-            CostTracker().track_response(response)
+        for i in range(max_continuations + 1):
+            response = self.llm.invoke(current_messages)
+            CostTracker().track_response(response, current_messages)
             
-            chunk = response.content
-            full_content += chunk
+            # Check for reasoning
+            reasoning = getattr(response, "reasoning_content", None)
+            if reasoning:
+                full_report += f"\n\n<thought>\n{reasoning}\n</thought>\n\n"
             
-            # Check finish reason
-            # OpenAI/Together usually return 'length' if max_tokens reached
+            content = response.content if response.content else ""
+            full_report += content
+            
+            # Continuation check
             finish_reason = response.response_metadata.get("finish_reason")
-            
-            if finish_reason == "length":
-                logger.info("⚠️ Response truncated (length). Continuing generation...")
-                from langchain_core.messages import AIMessage
-                messages.append(AIMessage(content=chunk))
-                messages.append(HumanMessage(content="Continue exactly where you left off."))
+            if finish_reason == "length" or (content.count("```") % 2 != 0):
+                logger.info(f"🔄 Report truncated. Requesting continuation ({i+1})...")
+                current_messages.append(AIMessage(content=content))
+                current_messages.append(HumanMessage(content="CONTINUE THE IMPLEMENTATION PLAN. You were cut off. Pick up exactly where you left off, continuing any code blocks or sentences. Do not restart."))
+                continue
             else:
                 break
-        
-        self._save_plan(full_content)
-        
-        # Save Cost Report
-        cost_path = os.path.join(self.gen_dir, "cost_report.txt")
-        with open(cost_path, "w", encoding="utf-8") as f:
-            f.write(CostTracker().get_summary_string())
-            
-        return {"final_report": full_content}
+                
+        self._save_plan(full_report)
+        return {"final_report": full_report}
 
-    # --- Helpers ---
+    # --- HELPERS ---
+    def _save_stitch(self, list_of_bytes: List[bytes], count: int):
+        for i, b_bytes in enumerate(list_of_bytes):
+            suffix = f"_{i+1}" if len(list_of_bytes) > 1 else ""
+            path = os.path.join(self.gen_dir, f"layer_{count}{suffix}.png")
+            with open(path, "wb") as f: f.write(b_bytes)
+            self.composer.add_thought(PIL.Image.open(io.BytesIO(b_bytes)), f"Layer {count}{suffix}")
 
-    def _execute_inspect_single(self, family: str) -> str:
-        # Normalize
-        norm = self.decoder._normalize_family(family)
-        if norm not in self.decoder.context.coords:
-            matches = self.vocab_index.search(family, limit=1)
-            if matches:
-                family = matches[0]
-            else:
-                return f"⚠️ Family '{family}' not found."
-
-        # Crop
-        crop, neighbors = self.decoder.crop_and_decode(family)
-        if not crop:
-             return f"⚠️ Failed to crop '{family}'."
-             
-        self.composer.add_thought(crop, family)
-        return self._analyze_crop_with_model(family, crop, neighbors)
-
-    def _analyze_crop_with_model(self, family: str, crop: PIL.Image.Image, neighbors: List[str]) -> str:
-        buf = io.BytesIO()
-        crop.save(buf, format='PNG')
-        b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
-        
-        messages = [
-            HumanMessage(content=[
-                {"type": "text", "text": f"### COMPONENT ANALYSIS: {family}\nNeighbors: {neighbors}\nAnalyze this UI component code screenshot. Extract props, state, and structure."},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-            ])
-        ]
-        
-        # Use valid tool config for generic model if needed, but self.llm is sufficient
-        response = self.llm.invoke(messages)
-        CostTracker().track_response(response) # Track usage here too
-        return response.content
-
-    def _save_plan(self, markdown: str):
-        md_path = os.path.join(self.gen_dir, "implementation_plan.md")
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.write(markdown)
-        logger.info(f"✅ Implementation Plan: {md_path}")
-        
-        trace_path = os.path.join(self.gen_dir, "architectural_trace.png")
-        self.composer.compose(trace_path)
+    def _log_analysis(self, count, batch, text):
+        log_path = os.path.join(self.gen_dir, "recursion_log.md")
+        mode = "w" if count == 1 else "a"
+        with open(log_path, mode, encoding="utf-8") as f:
+            f.write(f"\n# LAYER {count} (Files: {len(batch)})\n\n**Files:** `{batch}`\n\n{text}\n\n---\n")
+    
+    def _save_plan(self, text):
+        with open(os.path.join(self.gen_dir, "final_plan.md"), "w", encoding="utf-8") as f: f.write(text)
+        self.composer.compose(os.path.join(self.gen_dir, "trace.png"))
+        with open(os.path.join(self.gen_dir, "cost.txt"), "w", encoding="utf-8") as f: f.write(CostTracker().get_summary_string())
+    
+    def assign_workers(self, state): pass

@@ -38,11 +38,16 @@ def build_graph(tiles_dir: str, config: Optional[Dict] = None):
     # 1. Initialize LLM
     model_name = config.get("model_name") or "gpt-4o"
     provider = config.get("provider") or "openai"
+    pricing = config.get("pricing") or {
+        "input": config.get("input", 1.0),
+        "output": config.get("output", 1.0)
+    }
     
     # Initialize Cost Tracker
     from utils.cost import CostTracker
     tracker = CostTracker()
     tracker.set_model(model_name)
+    tracker.set_pricing(pricing)
     
     logger.info(f"🤖 Initializing LLM: {provider}/{model_name}")
     
@@ -52,6 +57,14 @@ def build_graph(tiles_dir: str, config: Optional[Dict] = None):
     # We pass the Output Directory logic here
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = f"ai/output/{timestamp}"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Configure File Logging
+    log_file = os.path.join(output_dir, "agent.log")
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logging.getLogger().addHandler(file_handler)
+    logger.info(f"📝 Logging to: {log_file}")
     
     tools_config = {
         "tiles_dir": tiles_dir,

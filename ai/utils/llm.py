@@ -42,10 +42,11 @@ def get_llm(provider: str, model_name: str, config: Optional[Dict[str, Any]] = N
                 "model": model_name,
                 "api_key": api_key,
                 "temperature": temperature,
-                "max_tokens": max_tokens
+                "max_tokens": max_tokens,
             }
             if base_url:
                 kwargs["base_url"] = base_url
+                kwargs['reasoning'] = {"enabled": True}
                 
             return ChatTogether(**kwargs)
             

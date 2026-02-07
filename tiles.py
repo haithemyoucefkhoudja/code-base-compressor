@@ -95,7 +95,11 @@ def glyph_for_family(family: str, cfg: TileConfig) -> np.ndarray:
 
     return tile
 
-def generate_legend(unique_families: List[str], filename: str, cfg: TileConfig):
+# ----------------------------
+# 2) Legend Generator (Multi-Image Support)
+# ----------------------------
+
+def generate_legend(unique_families: List[str], base_filename: str, cfg: TileConfig):
     families = sorted(list(unique_families))
     if not families: return
 
@@ -108,7 +112,6 @@ def generate_legend(unique_families: List[str], filename: str, cfg: TileConfig):
     max_text_w = 0
     for fam in families:
         fam_draw  = re.sub(r"[\n\t\r]+", " ", fam).strip()
-        
         bbox = dummy_draw.textbbox((0, 0), fam_draw, font=font)
         w = bbox[2] - bbox[0]
         max_text_w = max(max_text_w, w)
@@ -116,32 +119,56 @@ def generate_legend(unique_families: List[str], filename: str, cfg: TileConfig):
     col_w = 10 + cfg.tile_size + 10 + max_text_w + 50
     row_h = max(cfg.tile_size, 20) + 4
     
+    # Calculate items per page based on max_dimension
+    # We want strict single column behavior? Or multi-column?
+    # Original logic was multi-column. Let's keep multi-column but limit total height.
+    
+    # Heuristic for multi-column layout
     n_fams = len(families)
     total_area = n_fams * row_h * col_w
     side = math.sqrt(total_area)
-    
     num_cols = max(1, int(side // col_w) + 1)
-    items_per_col = math.ceil(n_fams / num_cols)
     
-    img_w = num_cols * col_w
-    img_h = items_per_col * row_h
-    
-    img = Image.new("RGB", (img_w, img_h), (30, 30, 30))
-    draw = ImageDraw.Draw(img)
-
-    for i, fam in enumerate(families):
-        col = i // items_per_col
-        row = i % items_per_col
-        x = col * col_w
-        y = row * row_h + 2
+    # Ensure num_cols fits within max width (optional, but good safety)
+    if num_cols * col_w > cfg.max_dimension:
+        num_cols = max(1, cfg.max_dimension // col_w)
         
-        glyph = glyph_for_family(fam, cfg)
-        img.paste(Image.fromarray(glyph), (x + 10, y))
-        fam_draw  = re.sub(r"[\n\t\r]+", " ", fam).strip()
-        draw.text((x + 10 + cfg.tile_size + 10, y), fam_draw, fill=(220, 220, 220), font=font)
-
-    img.save(filename)
-    print(f"Saved legend to {filename}")
+    # Calculate max items per single image
+    max_rows_per_col = (cfg.max_dimension) // row_h
+    items_per_page = num_cols * max_rows_per_col
+    
+    # Split families into pages
+    pages = [families[i:i + items_per_page] for i in range(0, len(families), items_per_page)]
+    
+    for page_idx, page_fams in enumerate(pages):
+        # Layout for this page
+        n_page_fams = len(page_fams)
+        items_per_col = math.ceil(n_page_fams / num_cols)
+        
+        img_w = num_cols * col_w
+        img_h = items_per_col * row_h
+        
+        # Ensure dimensions valid
+        img_h = max(img_h, row_h) 
+        
+        img = Image.new("RGB", (img_w, img_h), (30, 30, 30))
+        draw = ImageDraw.Draw(img)
+    
+        for i, fam in enumerate(page_fams):
+            col = i // items_per_col
+            row = i % items_per_col
+            x = col * col_w
+            y = row * row_h + 2
+            
+            glyph = glyph_for_family(fam, cfg)
+            img.paste(Image.fromarray(glyph), (x + 10, y))
+            fam_draw  = re.sub(r"[\n\t\r]+", " ", fam).strip()
+            draw.text((x + 10 + cfg.tile_size + 10, y), fam_draw, fill=(220, 220, 220), font=font)
+    
+        suffix = "" if page_idx == 0 else f"_{page_idx + 1}"
+        out_name = base_filename.replace(".png", f"{suffix}.png")
+        img.save(out_name)
+        print(f"Saved legend to {out_name}")
 
 
 # ----------------------------
@@ -221,11 +248,6 @@ def encode_rows_to_image(
         global_max_width = max(global_max_width, width_px)
         
         # Normalize rows with Wrapping
-        # Logic: 
-        # 1. Wrap individual examples if they exceed width.
-        # 2. Separate DIFFERENT examples with a 'Stripe' row (tile_size height).
-        # 3. No stripes between wrapped lines of the same example.
-        
         processed_rows = []
         for i, r in enumerate(group_rows):
             # Add SEP to the end of the logic sequence
@@ -243,9 +265,7 @@ def encode_rows_to_image(
                 processed_rows.append( (chunk, 1.0) ) # Normal height row
                 idx += total_tiles_wide
             
-            # Add Stripe after example (if not the last one, or maybe always?)
-            # User said "before and after". Let's put a separator after each example.
-            # "make it tile size" -> 1.0 factor
+            # Add Stripe after example
             if i < len(group_rows) - 1:
                  processed_rows.append( ([], 1.0) )
             
@@ -254,11 +274,7 @@ def encode_rows_to_image(
         for _, factor in processed_rows:
             content_h += int(cfg.tile_size * factor)
 
-        # Recalculate Content Height based on variable row heights
         content_w = width_px
-        content_h = header_h + sep_h
-        for _, factor in processed_rows:
-            content_h += int(cfg.tile_size * factor)
 
         # Add Border Tiles (16px on all sides)
         BORDER_SIZE = cfg.tile_size
@@ -269,7 +285,6 @@ def encode_rows_to_image(
         draw = ImageDraw.Draw(block_img)
         
         # Draw Border Tiles
-        # Generate a border glyph for this family
         border_glyph = glyph_for_family(fam + "::BORDER", cfg)
         b_tile = Image.fromarray(border_glyph)
         
@@ -294,15 +309,11 @@ def encode_rows_to_image(
         # Tiles & Stripes
         y = BORDER_SIZE + header_h
         
-        # We don't generate a stripe glyph anymore, just use black pixels.
-        
         for row_data, factor in processed_rows:
             h_px = int(cfg.tile_size * factor)
             
             if not row_data:
                 # Stripe Row (Empty Data) - Draw BLACK separator
-                # Draw a black rectangle across the content width
-                # (Inside standard borders)
                 draw.rectangle([(BORDER_SIZE, y), (BORDER_SIZE + width_px, y + h_px)], fill=(0,0,0))
             else:
                 # Normal Row
@@ -314,8 +325,7 @@ def encode_rows_to_image(
         # Bottom Separator Bar (inside border)
         draw.rectangle([(BORDER_SIZE, BORDER_SIZE + content_h - sep_h), (BORDER_SIZE + content_w, BORDER_SIZE + content_h)], fill=(0,0,0))
         
-        # 1px Outline invalid inside border? User asked for 16x16 tiles.
-        # But maybe we keep a thin line around content?
+        # 1px Outline
         draw.rectangle([(BORDER_SIZE, BORDER_SIZE), (full_w - BORDER_SIZE - 1, full_h - BORDER_SIZE - 1)], outline=(0,0,0), width=1)
         
         meta = {
@@ -346,28 +356,19 @@ def encode_rows_to_image(
         
         # Check if item fits on current shelf horizontally
         if current_shelf_x + w <= target_width:
-            # Fits horizontally. 
-            # Now Check Vertical Page Constraints for this item
             item_bottom = current_y + h
             
             if item_bottom > page_limit:
-                # This item crosses the page boundary!
-                # We cannot place it on this shelf (or this shelf is invalid here).
-                
-                # Strategy:
-                # 1. Flush current shelf to placed_items (it's done).
+                # Page Break
                 for item in current_shelf_items: placed_items.append(item)
                 
-                # 2. Advance current_y to start of NEXT PAGE
                 current_y = page_limit
                 page_limit += cfg.max_dimension
                 
-                # 3. Reset Shelf
                 current_shelf_x = 0
                 current_shelf_h = 0
                 current_shelf_items = []
                 
-                # 4. Now place item on new page shelf
                 current_shelf_items.append((b_img, current_shelf_x, current_y, b_meta))
                 current_shelf_x += w
                 current_shelf_h = h
@@ -378,25 +379,15 @@ def encode_rows_to_image(
                 current_shelf_h = max(current_shelf_h, h)
                 
         else:
-            # Does not fit horizontally. Start NEW SHELF (New Line).
+            # New Line / Shelf
             for item in current_shelf_items: placed_items.append(item)
             
             current_y += current_shelf_h
-            
-            # Check if this NEW shelf start overlaps boundary? 
-            # Usually strict packing prevents this if we check item-by-item below.
-            # But let's check if the *start* y is valid?
-            # Actually, `current_y` is just the top.
-            
             current_shelf_x = 0
             current_shelf_h = 0
             current_shelf_items = []
             
-            # Now we try to place the item on this NEW shelf.
-            # Again, check vertical fit.
             if current_y + h > page_limit:
-                # New line still crosses boundary!
-                # Force Page Break
                 current_y = page_limit
                 page_limit += cfg.max_dimension
             
@@ -408,13 +399,12 @@ def encode_rows_to_image(
         placed_items.append(item)
     current_y += current_shelf_h
     
-    # 5. Render Final Canvas (with possible splitting)
+    # 5. Render Final Canvas
     final_w = target_width
     final_h = current_y
     
     print(f"Canvas Size: {final_w}x{final_h} pixels")
     
-    # Determine if we need to split
     max_dim = cfg.max_dimension
     need_split = final_w > max_dim or final_h > max_dim
     
@@ -422,7 +412,6 @@ def encode_rows_to_image(
     saved_images = []
     
     if not need_split:
-        # Single image output
         canvas = Image.new("RGB", (final_w, final_h), cfg.background)
         for img, x, y, meta in placed_items:
             canvas.paste(img, (x, y))
@@ -437,7 +426,7 @@ def encode_rows_to_image(
         canvas.save(out_png_path, optimize=True)
         saved_images.append(out_png_path)
     else:
-        # Split into multiple tiles based on height
+        # Split into multiple tiles
         tile_height = max_dim
         num_tiles = math.ceil(final_h / tile_height)
         print(f"Splitting into {num_tiles} tiles (max dimension: {max_dim}px)")
@@ -454,9 +443,7 @@ def encode_rows_to_image(
             for img, x, y, meta in placed_items:
                 item_y_end = y + meta['h']
                 
-                # Check if this item overlaps with current tile
                 if item_y_end > y_start and y < y_end:
-                    # Calculate overlap region
                     paste_y = max(0, y - y_start)
                     crop_top = max(0, y_start - y)
                     crop_bottom = min(meta['h'], y_end - y)
@@ -465,7 +452,6 @@ def encode_rows_to_image(
                         cropped_img = img.crop((0, crop_top, meta['w'], crop_bottom))
                         tile_canvas.paste(cropped_img, (x, paste_y))
                         
-                        # Add coords for this tile (relative to tile)
                         all_coords.append({
                             "family": meta['family'],
                             "bbox": [x, paste_y, meta['w'], crop_bottom - crop_top],
@@ -480,28 +466,29 @@ def encode_rows_to_image(
             saved_images.append(tile_path)
             print(f"  Saved: {tile_path} ({final_w}x{tile_h})")
     
-    # Generate legend
+    # Generate legend with strict multi-image split
     legend_path = out_png_path.replace(".png", "_legend.png")
     
-    # Filter families for Legend to avoid bloating
-    # 1. Syntax ((){})
-    # 2. Key Markers (TYPE_INFO)
-    # 3. Explicit Headers (Modules) - optional, maybe only show checking '::'
-    # 4. Do NOT show distinct vocabulary tokens if there are thousands.
+    # Enriched Syntax List for Legend
+    syntax_chars = {
+        "(", ")", "{", "}", "[", "]", "<", ">",
+        "=>", "===", "==", "=", "!==", "!=",
+        "+", "-", "*", "/", "%", "++", "--",
+        "&&", "||", "!", "?", ":", ".", ",", ";",
+        "async", "await", "const", "let", "var",
+        "function", "return", "import", "export", "from",
+        "if", "else", "for", "while", "switch", "case",
+        "TYPE_INFO"
+    }
     
     legend_fams = []
-    syntax_chars = {"(", ")", "{", "}", "[", "]", "=>", ".", ",", ":", "TYPE_INFO"}
     
     for f in unique_families:
         if f in syntax_chars:
             legend_fams.append(f)
         elif "::" in f:
-             # It's a header/module key?
-             # User might want to see module colors.
-             # Limit to top 200 modules?
              legend_fams.append(f)
              
-    # Sort: Syntax first, then Modules
     legend_fams.sort(key=lambda x: (0 if x in syntax_chars else 1, x))
     
     generate_legend(legend_fams, legend_path, cfg)
@@ -514,15 +501,13 @@ def encode_rows_to_image(
     with open(out_png_path.replace(".png", ".coords.json"), "w", encoding="utf-8") as f:
         json.dump(all_coords, f, indent=2)
     
-    # --- NEW: Save tile manifest (which families in which tile) ---
+    # Save manifest
     tile_manifest = {}
     for coord in all_coords:
         tile_idx = coord.get('tile_index', 0)
         family = coord['family']
-        if tile_idx not in tile_manifest:
-            tile_manifest[tile_idx] = []
-        if family not in tile_manifest[tile_idx]:
-            tile_manifest[tile_idx].append(family)
+        if tile_idx not in tile_manifest: tile_manifest[tile_idx] = []
+        if family not in tile_manifest[tile_idx]: tile_manifest[tile_idx].append(family)
     
     manifest_path = out_png_path.replace(".png", ".manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
@@ -549,6 +534,18 @@ def encode_rows_to_image(
 
 if __name__ == "__main__":
     import re
+    
+    # Ensure we can import from local analyzer module
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    
+    try:
+        from tree_sitter import Node
+        from analyzer.core.languages import get_parser
+    except ImportError as e:
+        print(f"Error importing analyzer/tree-sitter compatibility components: {e}")
+        print("Falling back to Regex? No, user demanded AST. Exiting.")
+        sys.exit(1)
+
     if len(sys.argv) < 2:
         print("Usage: python tiles.py <input.json>")
         sys.exit(1)
@@ -566,35 +563,143 @@ if __name__ == "__main__":
     def register(name, src, kind):
         if not name: return
         if not src: src = "unknown"
-        key = f"{src}::{name}"
-        registry[key] = {"name": name, "source": src, "type": kind}
+        # Disambiguate name with kind
+        # e.g. "Button" -> "Button::JSX" 
+        # (User requested "JSX constant chain component" labeling)
+        
+        distinct_name = name
+        if kind == "jsx": distinct_name = f"{name}::JSX"
+        elif kind == "call": distinct_name = f"{name}::CALL"
+        elif kind == "const": distinct_name = f"{name}::CONST"
+        elif kind == "def": distinct_name = f"{name}::DEF"
+        # ref usually points to one of the above, keep as is or match target? 
+        # For now, refs just point to the name. 
+        
+        key = f"{src}::{distinct_name}"
+        registry[key] = {"name": distinct_name, "source": src, "type": kind}
+        
         if name not in name_map: name_map[name] = key
+        name_map[distinct_name] = key
+        return key, distinct_name
+
     for p in data.get("call_patterns", []): register(p.get("chain"), p.get("source_import"), "call")
     for p in data.get("jsx_patterns", []): register(p.get("component"), p.get("source_import"), "jsx")
     for p in data.get("constant_patterns", []): register(p.get("constant"), p.get("source_import"), "const")
     for p in data.get("component_definitions", []): register(p.get("component"), p.get("file"), "def")
     for p in data.get("reference_patterns", []): register(p.get("name"), p.get("source_import"), "ref")
+
+    # Register sub-patterns and sub-components (with redundancy check)
+    seen_names = set(name_map.keys())
+
+    for p in data.get("call_patterns", []):
+        src = p.get("source_import") or "unknown"
+        for sub in p.get("sub_patterns", []):
+            if sub not in seen_names:
+                register(sub, src, "call")
+                seen_names.add(sub)
+
+    for p in data.get("jsx_patterns", []):
+        src = p.get("source_import") or "unknown"
+        for sub in p.get("sub_components", []):
+            if sub not in seen_names:
+                register(sub, src, "jsx")
+                seen_names.add(sub)
     
-    # B. Examples
-    examples = []
-    token_re = re.compile(r"[\w]+(?:\.[\w]+)*|[(){}]")
+    # B. AST Tokenizer
+    
+    # Whitelist of Keywords & Syntax to KEEP
+    ACCEPTED_SYNTAX = {
+        # Keywords
+        "async", "await", "const", "let", "var", "function", "return", "import", "export", "from",
+        "if", "else", "for", "while", "switch", "case", "default", "break", "continue",
+        "new", "class", "extends", "super", "this", "typeof", "instanceof", "void", "delete", "in", "of",
+        "try", "catch", "finally", "throw", "debugger", "with", "yield",
+        "declare", "namespace", "module", "interface", "type", "implements", "public", "private", "protected",
+        "static", "readonly", "abstract", "enum", "as", "is", "keyof", "global", "require",
+        
+        # Primitive Types (TS)
+        "string", "number", "boolean", "any", "unknown", "never", "object", "symbol", "bigint", "undefined", "null", "true", "false",
+        
+        # Punctuation & Operators
+        "(", ")", "{", "}", "[", "]", "<", ">",
+        "=>", "...", ".", ",", ":", ";", "?", "!",
+        "=", "==", "===", "!=", "!==",
+        "+", "-", "*", "/", "%", "**", "++", "--",
+        "&", "|", "^", "~", "<<", ">>", ">>>", 
+        "&&", "||", "??",
+        "+=", "-=", "*=", "/=", "%=", "**=", "&=", "|=", "^=", "<<=", ">>=", ">>>="
+    }
     
     def resolve(t): return name_map.get(t)
+    
+    def tokenize_ast(code_snippet: str) -> List[str]:
+        """
+        Parses code snippet using Tree-Sitter and returns a list of filtered tokens.
+        - Keywords/Syntax -> kept as is.
+        - Identifiers -> kept ONLY if in registry.
+        - Everything else -> skipped.
+        """
+        if not code_snippet.strip(): return []
+        
+        # Use JS Parser for fragments (works well for both usually, or fallback)
+        parser = get_parser("file.tsx") # Use TSX parser for maximum compatibility
+        tree = parser.parse(code_snippet.encode('utf-8'))
+        
+        tokens = []
+        
+        def walk(node):
+            # 1. Check if this whole node matches something in our registry
+            # (e.g. "api.on" which is a member_expression)
+            text = code_snippet.encode('utf-8')[node.start_byte:node.end_byte].decode('utf-8')
+            reg_key = resolve(text)
+            if reg_key:
+                tokens.append(reg_key)
+                return # Match found, don't look at children
+                
+            # 2. If no match and has children, walk them
+            if len(node.children) > 0:
+                for child in node.children:
+                    walk(child)
+            else:
+                # 3. Leaf node (no match found above)
+                if not text.strip(): return 
+                
+                # Check Allowed Syntax
+                if text in ACCEPTED_SYNTAX:
+                    tokens.append(text)
+                    return
+                    
+                # Special handling for string literals
+                if node.type == "string":
+                     inner = text.strip('"\'')
+                     reg_key_lit = resolve(inner)
+                     if reg_key_lit:
+                         tokens.append(reg_key_lit)
+                         return
+        
+        walk(tree.root_node)
+        return tokens
+
+    examples = []
     
     def proc(plist, nkey, fkey):
         for p in plist:
             hname:str = p.get(nkey)
             if not hname: continue
             
-            # Remove newlines to prevent overlap
             src = p.get("source_import") or p.get("file") or "unknown"
-            hkey = f"{src}::{hname}"
-            if hkey not in registry: register(hname, src, "auto")
+            # Determine kind for registry lookup
+            kind = "call" if nkey == "chain" else ("jsx" if nkey == "component" and fkey == "abstract_forms" and plist == data.get("jsx_patterns", []) else ("const" if nkey == "constant" else ("def" if nkey == "component" and fkey == "abstract_forms" and plist == data.get("component_definitions", []) else "auto")))
             
-            # Type Encoding Enhancement
-            # If pattern has return type or signature, we add a generic marker or specific type token
-            # User asked for "types the return". 
-            # We can look for 'return_type' or check signature.
+            # Use register to get the correct disambiguated key
+            hkey, _ = register(hname, src, kind)
+            
+            # Also register sub-patterns/components to ensure they ARE in the registry
+            sub_key = "sub_components" if nkey == "component" else ("sub_patterns" if nkey == "chain" else None)
+            if sub_key:
+                for sub_name in p.get(sub_key, []):
+                    register(sub_name, src, kind)
+            
             has_type = False
             if p.get("return_type") and p.get("return_type") != "unknown":
                 has_type = True
@@ -602,23 +707,20 @@ if __name__ == "__main__":
                 has_type = True
                 
             for f in p.get(fkey, []):
-                tokens = token_re.findall(f)
-                row = [hkey]
+                # AST Tokenization
+                row_tokens = tokenize_ast(f)
                 
-                # Injection: If typed, add a visual indicator (Type Glyph) right after header
-                # We use a special family "TYPE::marker" which will have a consistent color
+                row = [hkey]
                 if has_type:
                     row.append("TYPE_INFO") 
                 
-                for t in tokens:
-                    if t in "(){}":
-                        # Syntax Encoding Enhancement
-                        # Pass brackets directly. They become their own family "{" etc.
-                        row.append(t)
+                for t in row_tokens:
+                    # Determine if reference vs syntax
+                    if "::" in t:
+                        if t != hkey: row.append(t)
                     else:
-                        tok = resolve(t)
-                        if tok:
-                            if t != hname: row.append(tok)
+                        # Syntax token
+                        row.append(t)
                             
                 if len(row) > 0: examples.append(row)
                 
@@ -629,12 +731,11 @@ if __name__ == "__main__":
     
     heads = {e[0] for e in examples}
     for k, v in registry.items():
-        if v['type'] == 'vocab' and k not in heads:
+        if k not in heads:
             examples.append([k, "PAD"])
             
-    # C. Output - Create directory named after the repo
+    # C. Output
     base = os.path.splitext(os.path.basename(input_path))[0]
-    # Remove _patterns suffix if present
     if base.endswith("_patterns"):
         repo_name = base[:-9]
     else:

@@ -1,20 +1,17 @@
+import os
 import logging
+import base64
+import io
 import tiktoken
-from typing import Any 
+import PIL.Image
+from datetime import datetime
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
 class CostTracker:
     _instance = None
     
-    # Approximate pricing (per 1M tokens) - Update as needed
-    PRICING = {
-        "gpt-4o": {"input": 5.00, "output": 15.00},
-        "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-        "claude-3-5-sonnet": {"input": 3.00, "output": 15.00},
-        # Fallback generic
-        "default": {"input": 1.00, "output": 1.00} 
-    }
 
     def __new__(cls):
         if cls._instance is None:
@@ -27,43 +24,88 @@ class CostTracker:
         self.total_output_tokens = 0
         self.total_cost = 0.0
         self.model_name = "default"
+        self.log_file_path = None
 
     def set_model(self, model_name: str):
         self.model_name = model_name
+    
+    def set_pricing(self, model_pricing:Dict[str,float]):
+        self.pricing = model_pricing
 
-    def track_response(self, response: Any):
+    def set_log_path(self, path: str):
+        self.log_file_path = path
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    def track_response(self, response: Any, request_messages: List[Any] | None = None):
         """
         Track usage from a LangChain AIMessage response.
+        If usage is missing, estimates using tiktoken and image dimensions.
         """
         try:
             usage = response.response_metadata.get("token_usage", {})
             input_tokens = usage.get("prompt_tokens", 0)
             output_tokens = usage.get("completion_tokens", 0)
             
-            # If usage not provided by provider (some don't), estimate
-            if input_tokens == 0 and response.content:
-                 # Rough estimation
-                 enc = tiktoken.get_encoding("cl100k_base")
-                 output_tokens = len(enc.encode(str(response.content)))
-                 # Cannot easily estimate prompt without input text, assume 1k for now or skip
-                 input_tokens = 0 
-            
+            # Fallback to estimation
+            if input_tokens == 0 or output_tokens == 0:
+                logger.info("🕒 Estimating tokens (Tiktoken/Image Fallback)...")
+                enc = tiktoken.get_encoding("cl100k_base")
+                
+                # Estimate Output
+                if output_tokens == 0 and response.content:
+                     output_tokens = len(enc.encode(str(response.content)))
+                
+                # Estimate Input
+                if input_tokens == 0 and request_messages:
+                    for msg in request_messages:
+                        content = msg.content
+                        if isinstance(content, str):
+                            input_tokens += len(enc.encode(content))
+                        elif isinstance(content, list):
+                            for part in content:
+                                if part.get("type") == "text":
+                                    input_tokens += len(enc.encode(part["text"]))
+                                elif part.get("type") == "image_url":
+                                    input_tokens += self._estimate_image_tokens(part["image_url"]["url"])
+                
             self._add_usage(input_tokens, output_tokens)
             
         except Exception as e:
             logger.warning(f"Failed to track cost: {e}")
 
+    def _estimate_image_tokens(self, image_url: str) -> int:
+        """Formula: T = min(2, max(H // 560, 1)) * min(2, max(W // 560, 1)) * 1601"""
+        try:
+            if not image_url.startswith("data:image"):
+                return 1601 # Fallback for non-base64
+                
+            header, encoded = image_url.split(",", 1)
+            image_data = base64.b64decode(encoded)
+            img = PIL.Image.open(io.BytesIO(image_data))
+            W, H = img.size
+            
+            tokens = min(2, max(H // 560, 1)) * min(2, max(W // 560, 1)) * 1601
+            return tokens
+        except Exception as e:
+            logger.warning(f"Image estimation failed: {e}")
+            return 1601
+
     def _add_usage(self, input_tokens: int, output_tokens: int):
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
+        cost_input = (input_tokens / 1_000_000) * self.pricing["input"]
+        cost_output = (output_tokens / 1_000_000) * self.pricing["output"]
         
-        # Calculate Cost
-        price = self.PRICING.get(self.model_name) or self.PRICING.get("default")
+        current_cost = cost_input + cost_output
+        self.total_cost += current_cost
         
-        cost_input = (input_tokens / 1_000_000) * price["input"]
-        cost_output = (output_tokens / 1_000_000) * price["output"]
+        msg = f"📊 [COST] Run: ↓{input_tokens:,} ↑{output_tokens:,} | 💵 Subtotal: ${current_cost:.4f} | 💰 Accrued: ${self.total_cost:.4f}"
+        logger.info(msg)
         
-        self.total_cost += (cost_input + cost_output)
+        if self.log_file_path:
+            with open(self.log_file_path, "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {msg}\n")
 
     def get_summary_string(self) -> str:
         lines = []
@@ -79,4 +121,4 @@ class CostTracker:
         return "\n".join(lines)
 
     def print_summary(self):
-        print("\n" + self.get_summary_string() + "\n")
+        logger.info("\n" + self.get_summary_string() + "\n")

@@ -1,6 +1,7 @@
 {
     "tiles_dir": "./repo_tiles",
     "provider":"together",
-    "query": "Implement robust mechanism of adding budget Limit of each team member!",
-    "model_name": "moonshotai/Kimi-K2.5"
+    "query": "What invariant guarantees that exactly one database backend is reachable and used for the lifetime of a request, and where is that invariant enforced?",
+    "model_name": "moonshotai/Kimi-K2.5",
+    "pricing":{"input":0.5,"output":2.8}
 }
