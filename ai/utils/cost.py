@@ -43,12 +43,24 @@ class CostTracker:
         If usage is missing, estimates using tiktoken and image dimensions.
         """
         try:
-            usage = response.response_metadata.get("token_usage", {})
+            finish_reason = response.response_metadata.get("finish_reason")
+            logger.info(f"🏁 [FINISH REASON]: {finish_reason}")
+
+            usage = response.response_metadata.get("token_usage") or getattr(response, "usage_metadata", None) or {}
             
             logger.info(f"📊 [PROMPT USAGE]: {json.dumps(usage, indent=2)}")
             
-            input_tokens = usage.get("prompt_tokens", 0)
-            output_tokens = usage.get("completion_tokens", 0)
+            input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens", 0)
+            output_tokens = usage.get("output_tokens") or usage.get("completion_tokens", 0)
+            prompt_details = usage.get("prompt_tokens_details") or {}
+            cached_tokens = (
+                prompt_details.get("cached_tokens", 0) or 
+                usage.get("input_token_details",{}).get("cache_read", 0) or 
+                usage.get("cached_prompt_tokens", 0) or 
+                usage.get("cached_tokens",0)
+            )
+            
+            logger.info(f"🔢 [TOKEN COUNT]: Input: {input_tokens:,} | Output: {output_tokens:,} | Cached: {cached_tokens:,}")
             
             # Fallback to estimation
             if input_tokens == 0 or output_tokens == 0:
@@ -72,7 +84,7 @@ class CostTracker:
                                 elif part.get("type") == "image_url":
                                     input_tokens += self._estimate_image_tokens(part["image_url"]["url"])
                 
-            self._add_usage(input_tokens, output_tokens)
+            self._add_usage(input_tokens, output_tokens,cached_tokens)
             
         except Exception as e:
             logger.warning(f"Failed to track cost: {e}")
@@ -94,10 +106,12 @@ class CostTracker:
             logger.warning(f"Image estimation failed: {e}")
             return 1601
 
-    def _add_usage(self, input_tokens: int, output_tokens: int):
+    def _add_usage(self, input_tokens: int, output_tokens: int, cached_tokens: int):
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
-        cost_input = (input_tokens / 1_000_000) * self.pricing["input"]
+        cost_input = ((input_tokens - cached_tokens) / 1_000_000) * self.pricing.get("input", 0)
+        cost_cached = (cached_tokens / 1_000_000) * self.pricing.get("cache", 0)
+        cost_input += cost_cached
         cost_output = (output_tokens / 1_000_000) * self.pricing["output"]
         
         current_cost = cost_input + cost_output

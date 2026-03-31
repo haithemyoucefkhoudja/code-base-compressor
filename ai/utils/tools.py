@@ -50,17 +50,17 @@ class VisualContext:
 class InspectionResult:
     """Result of inspecting a component's visual tile."""
     family: str
-    neighbors: List[str]
-    color_analysis: Dict[str, int]  # family -> pixel count
-    density: str  # "sparse", "medium", "dense"
+    density: str # sparse, medium, dense
+    color_analysis: Dict[str, int] # Now represents CHILDREN (contained elements)
+    most_frequent_parents: Dict[str, int] # NEW: Represents PARENTS (usage context)
     props: List[str]
-    # Detailed Context
     # Detailed Context
     prop_types: Optional[Dict[str, Any]] = None
     return_type: Optional[str] = None
     variations: Optional[List[Dict[str, Any]]] = None
     signature: Optional[Dict[str, Any]] = None
     shapes: Optional[List[Dict[str, Any]]] = None
+    subs:Optional[List[str]] = None
 
 # --- Tool 1: Visual Decoder (The Eyes) ---
 
@@ -85,6 +85,7 @@ class VisualDecoder:
         self.coords_path = os.path.join(tiles_dir, "tiles.coords.json")
         self.map_path = os.path.join(tiles_dir, "map.json")
         self.vocab_path = os.path.join(tiles_dir, "tiles.vocab.json")
+        self.element_analysis_path = os.path.join(tiles_dir, "tiles.element_analysis.json")
         
         # Patterns file is in parent directory with repo name
         parent_dir = os.path.dirname(tiles_dir)
@@ -102,7 +103,7 @@ class VisualDecoder:
     
         self.sub_to_parents = {}
     
-        def register(name, src, kind, props, prop_types=None, ret_type=None,variations=None, sig=None, shapes=None, subs=None):
+        def register(name, src, kind, props, prop_types=None, ret_type=None, variations=None, sig=None, shapes=None, subs=None):
             if not name: return None
             if not src: src = "unknown"
             
@@ -114,18 +115,36 @@ class VisualDecoder:
             elif kind == "def": distinct_name = f"{name}::DEF"
             
             key = f"{src}::{distinct_name}"
-            registry[key] = {
+            
+            new_data = {
                 "name": distinct_name, 
                 "source": src, 
                 "type": kind, 
-                "props": props,
-                "prop_types": prop_types,
-                "return_type": ret_type,
-                "variations": variations,
-                "signature": sig,
-                "shapes": shapes,
+                "props": props or [],
+                "prop_types": prop_types or {},
+                "return_type": ret_type or "",
+                "variations": variations or [],
+                "signature": sig or {},
+                "shapes": shapes or [],
                 "subs": subs or []
             }
+
+            if key in registry:
+                # Merge logic: Prioritize non-empty/richer data
+                old = registry[key]
+                for k, v in new_data.items():
+                    if v and not old.get(k):
+                        old[k] = v
+                    elif isinstance(v, list) and isinstance(old.get(k), list):
+                        # Combine lists without duplicates
+                        for item in v:
+                            if item not in old[k]: old[k].append(item)
+                    elif isinstance(v, dict) and isinstance(old.get(k), dict):
+                        # Shallow merge dicts
+                        old[k].update({mk: mv for mk, mv in v.items() if mv})
+                return key
+
+            registry[key] = new_data
             return key
             
         for p in data.get("call_patterns", []): 
@@ -168,6 +187,12 @@ class VisualDecoder:
         for p in data.get("reference_patterns", []): 
             register(p.get("name"), p.get("source_import"), "ref", [])
         self.registry = registry
+
+        # Load element analysis
+        self.element_analysis = {}
+        if os.path.exists(self.element_analysis_path):
+            with open(self.element_analysis_path, "r", encoding="utf-8") as f:
+                self.element_analysis = json.load(f)
         
         self.context = self._initialize_context()
     
@@ -381,96 +406,68 @@ class VisualDecoder:
         # 4. Give up, return original
         return family
 
-    def crop_and_decode(self, family: str) -> Tuple[Optional[Image.Image], List[str]]:
+    def crop_and_decode(self, family: str) -> Optional[Image.Image]:
         """
         Inspect a single family's bbox, return the image crop and list of found sub-families.
         Uses per-tile coordinates when manifest is available for efficient memory usage.
         """
         family = self._normalize_family(family)
         if family not in self.context.coords: 
-            return None, []
+            return None
         meta = self.context.coords[family]
         x, y, w, h = meta["bbox"]
         
         if w <= 0 or h <= 0: 
-            return None, []
+            return None
         
         # Determine which tile to use
         tile_index = meta.get("_tile_index", 0)
         
         # Strictly use per-tile image and tile-local coordinates
         source_image = self._get_tile_image(tile_index)
-        if source_image and "_tile_local_bbox" in meta:
-            # Use tile-local coordinates
-            lx, ly, lw, lh = meta["_tile_local_bbox"]
-            crop = source_image.crop((lx, ly, lx + lw, ly + lh))
-        else:
-            # Fallback (should not happen with regular numbered tiles)
-            # If we somehow don't have tile-local coords but have a stitched image in context
-            if self.context.image:
-                crop = self.context.image.crop((x, y, x + w, y + h))
+        
+        if source_image:
+            # Use tile-local coordinates if available (robustness)
+            if "_tile_local_bbox" in meta:
+                 lx, ly, lw, lh = meta["_tile_local_bbox"]
+                 crop = source_image.crop((lx, ly, lx + lw, ly + lh))
             else:
-                return None, []
-        
-        found_families = set()
-        HEADER_H, TILE_SIZE = 24, 16
-        
-        current_y = HEADER_H
-        while current_y < h - TILE_SIZE: 
-            current_x = 0
-            while current_x < w:
-                try:
-                    pixel = crop.getpixel((current_x, current_y))
-                    if pixel in self.context.palette:
-                        decoded = self.context.palette[pixel]
-                        if decoded not in ["PAD", "SEP", family]:
-                            found_families.add(decoded)
-                except: 
-                    pass
-                current_x += TILE_SIZE
-            current_y += TILE_SIZE
-            
-        return crop, list(found_families)
+                 # Fallback: assume bbox is already local (from tiles.py)
+                 crop = source_image.crop((x, y, x + w, y + h))
+            return crop
 
     def inspect(self, family: str) -> Optional[Tuple[bytes,InspectionResult]]:
         """
         Full inspection of a component - returns structured data.
         """
-        crop, neighbors = self.crop_and_decode(family)
+        crop = self.crop_and_decode(family)
         if not crop:
             return None
             
-        # Analyze color distribution
-        color_counts: Dict[str, int] = {}
-        HEADER_H, TILE_SIZE = 24, 16
-        total_tiles = 0
+        # Lookup pre-computed analysis
+        children_counts = {}
+        parent_counts = {}
+        density = "unknown" # Default density
+
+        norm_family = self._normalize_family(family) # Normalize early for analysis lookup
         
-        for y in range(HEADER_H, crop.height - TILE_SIZE, TILE_SIZE):
-            for x in range(0, crop.width, TILE_SIZE):
-                try:
-                    pixel = crop.getpixel((x, y))
-                    if pixel in self.context.palette:
-                        fam = self.context.palette[pixel]
-                        if fam not in ["PAD", "SEP"]:
-                            color_counts[fam] = color_counts.get(fam, 0) + 1
-                            total_tiles += 1
-                except:
-                    pass
+        if norm_family in self.element_analysis:
+            data = self.element_analysis[norm_family]
+            children_counts = data.get("children", {})
+            parent_counts = data.get("parents", {})
+            
+            # Simple heuristic for density based on child count
+            total_children = sum(children_counts.values())
+            if total_children < 5: density = "sparse"
+            elif total_children < 20: density = "medium"
+            else: density = "dense"
         
-        # Determine density
-        if total_tiles < 20:
-            density = "sparse"
-        elif total_tiles < 100:
-            density = "medium"
-        else:
-            density = "dense"
-        
-        # Convert to bytes
+        # Convert crop to bytes
         buf = io.BytesIO()
         crop.save(buf, format='PNG')
+        image_bytes = buf.getvalue()
         
-        # Normalize family for registry lookup
-        norm_family = self._normalize_family(family)
+        # Normalize family for registry lookup (already done, but keep for clarity)
         reg_entry = self.registry.get(norm_family) or {}
         
         # If this is a sub-item, link to parent metadata for richer analysis
@@ -483,17 +480,27 @@ class VisualDecoder:
             reg_entry['is_sub_item'] = True
             reg_entry['parent_key'] = parent_key
         
-        return buf.getvalue(), InspectionResult(
-            props=reg_entry.get('props') or [],
+        # Extract metadata from registry
+        props = reg_entry.get("props", [])
+        prop_types = reg_entry.get("prop_types")
+        return_type = reg_entry.get("return_type")
+        variations = reg_entry.get("variations")
+        signature = reg_entry.get("signature")
+        shapes = reg_entry.get("shapes")
+        subs = reg_entry.get("subs")
+
+        return image_bytes, InspectionResult(
             family=family,
-            neighbors=neighbors,
-            color_analysis=color_counts,
             density=density,
-            shapes=reg_entry.get('shapes'),
-            prop_types=reg_entry.get('prop_types'),
-            return_type=reg_entry.get('return_type'),
-            variations=reg_entry.get('variations'),
-            signature=reg_entry.get('signature')
+            color_analysis=children_counts,
+            most_frequent_parents=parent_counts,
+            props=props,
+            prop_types=prop_types,
+            return_type=return_type,
+            variations=variations,
+            signature=signature,
+            shapes=shapes,
+            subs=subs
         )
 
     def bulk_inspect(self, families: List[str]) -> Tuple[List[bytes], List[InspectionResult]]:
@@ -511,7 +518,7 @@ class VisualDecoder:
                 _,result  = res
                 results.append(result)
                 # Re-get crop for stitching
-                crop, _ = self.crop_and_decode(family)
+                crop = self.crop_and_decode(family)
                 if crop:
                     crops.append((crop, family))
         
@@ -531,36 +538,84 @@ class VisualDecoder:
 
     def _stitch_grid(self, crops: List[Tuple[Image.Image, str]], max_width: int = 10000, max_dimension: int = 10000) -> List[Image.Image]:
         """
-        Create labeled grids of component crops using BOOKSHELF packing.
-        Splits into multiple images if height exceeds max_dimension.
+        Create grids of component crops using PAGE-SAFE BOOKSHELF packing.
+        Ported from tiles.py: items are NEVER split across pages.
+        If an item would cross a page boundary, it's moved to the next page.
         """
         if not crops:
             return [Image.new("RGB", (100, 100), (30, 30, 30))]
         
         PAD = 10
         
-        # 1. Place items using shelf algorithm (infinite height for now)
-        positions = []
-        current_x, current_y = PAD, PAD
-        row_h = 0
+        # --- Phase 1: Page-safe placement (tiles.py logic, lines 356-411) ---
+        current_shelf_x = PAD
+        current_shelf_h = 0
+        current_shelf_items = []  # Items on the current shelf row
+        
+        placed_items = []  # Final list of (img, x, y, label)
+        
+        current_y = PAD
+        page_limit = max_dimension
         total_w = 0
         
         for crop, label in crops:
             w, h = crop.size
-            if current_x + w + PAD > max_width:
-                current_y += row_h + PAD
-                current_x = PAD
-                row_h = 0
             
-            positions.append((crop, current_x, current_y, label))
-            current_x += w + PAD
-            row_h = max(row_h, h)
-            total_w = max(total_w, current_x)
+            # Check if item fits on current shelf horizontally
+            if current_shelf_x + w + PAD <= max_width:
+                item_bottom = current_y + h
+                
+                if item_bottom > page_limit:
+                    # PAGE BREAK: flush current shelf, jump to next page
+                    for item in current_shelf_items:
+                        placed_items.append(item)
+                    
+                    current_y = page_limit + PAD
+                    page_limit += max_dimension
+                    
+                    current_shelf_x = PAD
+                    current_shelf_h = 0
+                    current_shelf_items = []
+                    
+                    # Place item on the new page
+                    current_shelf_items.append((crop, current_shelf_x, current_y, label))
+                    current_shelf_x += w + PAD
+                    current_shelf_h = h
+                else:
+                    # Safe to place on current shelf
+                    current_shelf_items.append((crop, current_shelf_x, current_y, label))
+                    current_shelf_x += w + PAD
+                    current_shelf_h = max(current_shelf_h, h)
+            else:
+                # NEW LINE: flush current shelf, move down
+                for item in current_shelf_items:
+                    placed_items.append(item)
+                
+                current_y += current_shelf_h + PAD
+                current_shelf_x = PAD
+                current_shelf_h = 0
+                current_shelf_items = []
+                
+                # Check page boundary for new line
+                if current_y + h > page_limit:
+                    current_y = page_limit + PAD
+                    page_limit += max_dimension
+                
+                current_shelf_items.append((crop, current_shelf_x, current_y, label))
+                current_shelf_x += w + PAD
+                current_shelf_h = h
+            
+            total_w = max(total_w, current_shelf_x)
         
-        final_h = current_y + row_h + PAD
+        # Flush remaining shelf items
+        for item in current_shelf_items:
+            placed_items.append(item)
+        current_y += current_shelf_h + PAD
+        
+        # --- Phase 2: Render into page-safe tile images ---
         final_w = max(total_w, 100)
+        final_h = current_y
         
-        # 2. Split into multiple tiles if needed (copying tiles.py logic)
         num_tiles = math.ceil(final_h / max_dimension)
         tiles = []
         
@@ -571,19 +626,14 @@ class VisualDecoder:
             
             tile_canvas = Image.new("RGB", (final_w, tile_h), (30, 30, 30))
             
-            for img, x, y, label in positions:
+            for img, x, y, label in placed_items:
                 item_h = img.height
                 item_y_end = y + item_h
                 
-                # If item overlaps with this tile's vertical slab
+                # Only paste items that belong to this tile
                 if item_y_end > y_start and y < y_end:
-                    paste_y = max(0, y - y_start)
-                    crop_top = max(0, y_start - y)
-                    crop_bottom = min(item_h, y_end - y)
-                    
-                    if crop_bottom > crop_top:
-                        cropped_img = img.crop((0, crop_top, img.width, crop_bottom))
-                        tile_canvas.paste(cropped_img, (x, paste_y))
+                    paste_y = y - y_start
+                    tile_canvas.paste(img, (x, paste_y))
             
             tiles.append(tile_canvas)
             
@@ -698,7 +748,7 @@ class VocabularyIndex:
 
         self.sub_to_parents = {}
 
-        def register(name, src, kind, props, prop_types=None, ret_type=None,variations=None, sig=None, shapes=None, subs=None):
+        def register(name, src, kind, props, prop_types=None, ret_type=None, variations=None, sig=None, shapes=None, subs=None):
             if not name: return None
             if not src: src = "unknown"
             
@@ -711,18 +761,33 @@ class VocabularyIndex:
             
             key = f"{src}::{distinct_name}"
             
-            registry[key] = {
+            new_data = {
                 "name": distinct_name, 
                 "source": src, 
                 "type": kind, 
-                "props": props,
-                "prop_types": prop_types,
-                "return_type": ret_type,
-                "variations": variations,
-                "signature": sig,
-                "shapes": shapes,
+                "props": props or [],
+                "prop_types": prop_types or {},
+                "return_type": ret_type or "",
+                "variations": variations or [],
+                "signature": sig or {},
+                "shapes": shapes or [],
                 "subs": subs or []
             }
+
+            if key in registry:
+                # Merge logic: Prioritize non-empty/richer data
+                old = registry[key]
+                for k, v in new_data.items():
+                    if v and not old.get(k):
+                        old[k] = v
+                    elif isinstance(v, list) and isinstance(old.get(k), list):
+                        for item in v:
+                            if item not in old[k]: old[k].append(item)
+                    elif isinstance(v, dict) and isinstance(old.get(k), dict):
+                        old[k].update({mk: mv for mk, mv in v.items() if mv})
+                return key
+
+            registry[key] = new_data
             return key
             
         for p in data.get("call_patterns", []): 
@@ -767,8 +832,17 @@ class VocabularyIndex:
         
         self.registry = registry
         
+        # Build inverse map: parent -> [children]
+        self.parent_to_children = {}
+        for child_key, parent_keys in self.sub_to_parents.items():
+            for pkey in parent_keys:
+                if pkey not in self.parent_to_children:
+                    self.parent_to_children[pkey] = []
+                if child_key not in self.parent_to_children[pkey]:
+                    self.parent_to_children[pkey].append(child_key)
+        
         self.vocab = list(self.flat_vocab)
-        print(f"📚 Vocabulary loaded: {len(self.vocab)}")
+        print(f"📚 Vocabulary loaded: {len(self.vocab)} | {len(self.parent_to_children)} families")
         
     def get_all(self) -> List[str]:
         """Return full vocabulary."""
@@ -814,16 +888,56 @@ class VocabularyIndex:
             fuzzy_full = difflib.get_close_matches(query, candidates, n=remaining, cutoff=cutoff)
             matches.extend(fuzzy_full)
         
-        # 3. Expand with parent patterns and prefer them
+        # 3. Deep family expansion (bidirectional)
+        #    - If match is a parent: include parent + all children
+        #    - If match is a child: include parent + all siblings
+        #    - Limit applies to number of *families*, not individual items
         final_results = []
-        for m in matches:
-            # If this is a sub-item, try to include the parent INSTEAD or BEFORE
-            if m in self.sub_to_parents:
-                for p_key in self.sub_to_parents[m]:
-                    if p_key not in final_results:
-                        final_results.append(p_key)
-            else:
-                if m not in final_results:
-                    final_results.append(m)
+        seen = set()
+        families_added = 0
         
-        return final_results[:limit]
+        for m in matches:
+            if m in seen:
+                continue
+            
+            # Determine the root parent(s) for this match
+            root_keys = []
+            if m in self.sub_to_parents:
+                # This is a child — its parents are the roots
+                root_keys = self.sub_to_parents[m]
+            elif m in self.parent_to_children:
+                # This is itself a parent/root
+                root_keys = [m]
+            else:
+                # Standalone item (no family)
+                if m not in seen:
+                    final_results.append(m)
+                    seen.add(m)
+                    families_added += 1
+                if families_added >= limit:
+                    break
+                continue
+            
+            # Expand each root with its full family
+            for root in root_keys:
+                if root in seen:
+                    continue
+                    
+                # Add the parent first
+                final_results.append(root)
+                seen.add(root)
+                
+                # Add all children of this parent
+                for child in self.parent_to_children.get(root, []):
+                    if child not in seen:
+                        final_results.append(child)
+                        seen.add(child)
+                
+                families_added += 1
+                if families_added >= limit:
+                    break
+            
+            if families_added >= limit:
+                break
+        
+        return final_results

@@ -20,7 +20,7 @@ def get_llm(provider: str, model_name: str, config: Optional[Dict[str, Any]] = N
     api_key = config.get("api_key") or os.environ.get("API_KEY")
     base_url = config.get("base_url") or os.environ.get("BASE_URL")
     temperature = config.get("temperature", 0.0)
-    max_tokens = config.get("max_tokens", 4000)
+    max_tokens = config.get("max_tokens", 65536)
     
     provider = provider.lower()
     
@@ -76,8 +76,7 @@ def get_llm(provider: str, model_name: str, config: Optional[Dict[str, Any]] = N
                 "api_key": api_key,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
-                "thinking_level":"high",
-                "include_thoughts":True
+                "thinking_level":"high"
             }
             if base_url:
                 kwargs["base_url"] = base_url
@@ -139,12 +138,15 @@ def get_llm(provider: str, model_name: str, config: Optional[Dict[str, Any]] = N
             if base_url:
                 logger.warning(f"Unknown provider '{provider}', attempting generic OpenAI compatibility.")
                 from langchain_openai import ChatOpenAI
-                return ChatOpenAI(
-                    model=model_name,
-                    api_key=api_key or "dummy",
-                    base_url=base_url,
-                    temperature=temperature
-                )
+                kwargs = {
+                "model": model_name,
+                "api_key": api_key,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "base_url":base_url,
+                # "reasoning":{"enabled": True}
+                }
+                return ChatOpenAI(**kwargs)
             else:
                 raise ValueError(f"Unsupported provider: {provider}")
 

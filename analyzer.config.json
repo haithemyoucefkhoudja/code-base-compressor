@@ -1,0 +1,15 @@
+{
+	"patterns": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
+	"exclude_dirs": [
+		"node_modules",
+		".next",
+		"dist",
+		"build",
+		"coverage",
+		".git"
+	],
+	"exclude_dts": true,
+	"threshold_percent": 0.3,
+	"min_freq": 2,
+	"model": "gpt-4o"
+}

@@ -12,8 +12,8 @@ import json
 import math
 import hashlib
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional, Any
-
+from typing import List, Dict, Tuple, Optional
+import re
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
@@ -220,13 +220,24 @@ def encode_rows_to_image(
     
     global_max_width = 0
 
+    # Analysis Data Structures
+    # element -> { children: {child: count}, parents: {parent: count} }
+    element_analysis = defaultdict(lambda: {"children": defaultdict(int), "parents": defaultdict(int)})
+
+
     for fam in sorted_fams:
         group_rows = family_groups[fam]
         
-        # A. Calculate Raw Token Width (just data)
+        # A. Calculate Raw Token Width & Analyze Composition
         max_data_tokens = 0
         for r in group_rows:
             max_data_tokens = max(max_data_tokens, len(r))
+            
+            # Analyze children (elements contained in this element)
+            for token in r:
+                if token in unique_families and token != fam and token not in [cfg.pad_family, cfg.sep_family]:
+                    element_analysis[fam]["children"][token] += 1
+                    element_analysis[token]["parents"][fam] += 1
         
         # B. Calculate Text Width
         fam_draw  = re.sub(r"[\n\t\r]+", " ", fam).strip()
@@ -525,6 +536,25 @@ def encode_rows_to_image(
             }
         }, f, indent=2)
     print(f"Saved: {manifest_path}")
+
+    # Save Analysis with "Most Frequent Parents" logic
+    analysis_path = out_png_path.replace(".png", ".analysis.json")
+    final_analysis = {}
+    
+    for fam, data in element_analysis.items():
+        # Sort parents by frequency
+        sorted_parents = sorted(data["parents"].items(), key=lambda x: x[1], reverse=True)
+        # Sort children by frequency
+        sorted_children = sorted(data["children"].items(), key=lambda x: x[1], reverse=True)
+        
+        final_analysis[fam] = {
+            "children": {k: v for k, v in sorted_children},
+            "parents": {k: v for k, v in sorted_parents}
+        }
+        
+    with open(analysis_path, "w", encoding="utf-8") as f:
+        json.dump(final_analysis, f, indent=2)
+    print(f"Saved: {analysis_path}")
         
     return {"dimensions": [final_w, final_h], "tiles": len(saved_images), "images": saved_images}
 
@@ -533,13 +563,11 @@ def encode_rows_to_image(
 # ----------------------------
 
 if __name__ == "__main__":
-    import re
     
     # Ensure we can import from local analyzer module
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     
     try:
-        from tree_sitter import Node
         from analyzer.core.languages import get_parser
     except ImportError as e:
         print(f"Error importing analyzer/tree-sitter compatibility components: {e}")

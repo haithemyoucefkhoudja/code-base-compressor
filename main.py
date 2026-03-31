@@ -3,7 +3,6 @@ import glob
 import json
 import argparse
 import tiktoken
-from analyzer.config import PATTERNS
 from analyzer.extractors.usages import extract_usages
 from analyzer.processing.aggregators import group_and_filter
 from analyzer.processing.cleaning import clean_call_patterns, clean_jsx_patterns, clean_constant_patterns
@@ -27,12 +26,47 @@ def count_tokens(files, model="gpt-4", exclude_dts=False):
             print(f"Error counting tokens for {file_path}: {e}")
     return total_tokens
 
+def load_config(config_path: str, cli_args: argparse.Namespace) -> dict:
+    """Load configuration from a JSON file and merge with CLI defaults."""
+    # Default configuration
+    config = {
+        "patterns": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
+        "exclude_dirs": ["node_modules", ".next", "dist", "build", ".git"],
+        "exclude_dts": False,
+        "threshold_percent": 0.25,
+        "min_freq": 2,
+        "model": "gpt-4"
+    }
+    
+    # Load from JSON file if provided
+    if config_path:
+        if os.path.exists(config_path):
+            print(f"Loading configuration from {config_path}...")
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    file_config = json.load(f)
+                    config.update(file_config)
+            except Exception as e:
+                print(f"Error loading config file: {e}. Using defaults.")
+        else:
+            print(f"Warning: Configuration file {config_path} not found. Using defaults.")
+
+    # CLI arguments override config file
+    if cli_args.exclude_dts:
+        config["exclude_dts"] = True
+
+    return config
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze a codebase for call and JSX patterns.")
     parser.add_argument("--path", default="repo", help="The path to the repository to analyze.")
     parser.add_argument("--output", help="The path to save the output JSON file. Defaults to <reponame>_patterns.json")
     parser.add_argument("--exclude-dts", action="store_true", help="Exclude .d.ts files from analysis and token count.")
+    parser.add_argument("--config", help="Path to a configuration JSON file.")
     args = parser.parse_args()
+
+    # 1. Load Configuration
+    config = load_config(args.config, args)
 
     target_repo_path = args.path
     
@@ -44,23 +78,26 @@ def main():
         output_file_path = f"{repo_name}_patterns.json"
 
     print(f"Target: {os.path.abspath(target_repo_path)}")
+    print(f"Using file patterns: {config['patterns']}")
+    print(f"Excluding directories/patterns: {config['exclude_dirs']}")
 
-    # 1. Scan Files
+    # 2. Scan Files
     all_raw_files = []
-    for pattern in PATTERNS:
+    for pattern in config["patterns"]:
         all_raw_files.extend(glob.glob(os.path.join(target_repo_path, pattern), recursive=True))
 
+    # Apply configured exclusions (e.g., node_modules, .next)
     files = [
         f for f in all_raw_files 
-        if "node_modules" not in f and ".next" not in f
+        if not any(excluded in f for excluded in config["exclude_dirs"])
     ]
     
-    if args.exclude_dts:
+    if config["exclude_dts"]:
         files = [f for f in files if not f.endswith(".d.ts")]
     
     # Count tokens
     print(f"Counting tokens in {len(files)} files...")
-    total_tokens = count_tokens(files, exclude_dts=args.exclude_dts)
+    total_tokens = count_tokens(files, model=config["model"], exclude_dts=config["exclude_dts"])
     print(f"Total tokens in repository: {total_tokens:,}")
     
     all_calls = []
@@ -88,22 +125,25 @@ def main():
     print("=" * 80)
     print(f"Extracted {len(all_calls)} call usages, {len(all_jsxs)} JSX usages. {len(all_component_defs)} component definitions, {len(all_type_defs)} type definitions.")
 
-    # 2. Process Data: Group and filter
-    call_patterns, jsx_patterns, const_patterns, ref_patterns, raw_vocab = group_and_filter(all_calls, all_jsxs, all_constant_defs, all_references)
+    # 3. Process Data: Group and filter
+    call_patterns, jsx_patterns, const_patterns, ref_patterns, raw_vocab = group_and_filter(
+        all_calls, all_jsxs, all_constant_defs, all_references,
+        threshold_percent=config["threshold_percent"],
+        min_freq=config["min_freq"]
+    )
     
-    # 3. Clean/Merge
+    # 4. Clean/Merge
     cleaned_calls = clean_call_patterns(call_patterns)
     cleaned_jsx = clean_jsx_patterns(jsx_patterns)
     cleaned_constants = clean_constant_patterns(const_patterns)
+    
     # Create a set of all names already captured to avoid duplicates
     captured_names = set()
     
     cleaned_components = [comp for comp in all_component_defs]
-    # captured_names.update(comp.name for comp  in cleaned_components)
     captured_names.update(jsx['component'] for jsx in cleaned_jsx)
     for jsx in cleaned_jsx:
         captured_names.update(jsx.get('sub_components', []))
-    
     
     captured_names.update(typedef.name for typedef in all_type_defs)
 
@@ -111,8 +151,6 @@ def main():
     for call in cleaned_calls:
         captured_names.update(call.get('sub_patterns', []))
     
-    
-
     # Filter constants: Remove if already in captured_names
     cleaned_constants = [c for c in cleaned_constants if c['constant'] not in captured_names]
     
@@ -122,32 +160,23 @@ def main():
     # Filter references: Remove if already in captured_names
     cleaned_references = [r for r in ref_patterns if r['name'] not in captured_names]
     
-
-    # 4. compress
+    # 5. Compress & Prepare abstract forms
     definitions = {}
-    
     for comp in cleaned_components:
         name = comp.name
         examples = comp.code
         if name and examples:
             definitions[name] = examples
 
-    # for p in cleaned_calls: raw_vocab.add(p["chain"])
-    # for p in cleaned_jsx: raw_vocab.add(p["component"])
-    # for p in cleaned_components: raw_vocab.add(p["component"])
-    # raw_vocab.update(definitions.keys())
-
-    # abstractor = AbstractGenerator(raw_vocab, definitions)
     print(f"Abstracting with {len(raw_vocab)} vocabulary terms and {len(definitions)} definitions...")
-
-    # 3. Process
     
     for comp in cleaned_components:
         forms = set()
         sig = comp.code
         if sig: forms.add(sig)
         comp.abstract_forms = sorted(list(forms))
-        del comp.code
+        if hasattr(comp, 'code'):
+            del comp.code
 
     sections = ["call_patterns", "jsx_patterns"]
     for key in sections:
@@ -165,7 +194,7 @@ def main():
             item["abstract_forms"] = sorted(list(forms))
             if "examples" in item: del item["examples"]
 
-    # 5. Save
+    # 6. Save
     summary = {
         "total_calls": sum(x['frequency'] for x in cleaned_calls),
         "total_jsx": sum(x['frequency'] for x in cleaned_jsx),
@@ -176,13 +205,6 @@ def main():
         "unique_references": len(cleaned_references),
     }
 
-    # Filter definitions based on presence in cleaned patterns
-    # active_patterns = set()
-    # for c in cleaned_calls: active_patterns.add(c['chain'])
-    # for j in cleaned_jsx: active_patterns.add(j['component'])
-    # for k in cleaned_constants: active_patterns.add(k['constant'])
-    # for r in cleaned_references: active_patterns.add(r['name'])
-
     final_output = {
         "summary": summary,
         "vocabulary": raw_vocab,
@@ -191,8 +213,8 @@ def main():
         "constant_patterns": cleaned_constants,
         "reference_patterns": cleaned_references,
         "component_definitions": []
-        
     }
+    
     for c in cleaned_components:
         if c.name == 'ChatProvider':
             print("c.code", c.abstract_forms)
@@ -205,8 +227,8 @@ def main():
                 "prop_types": c.prop_types,
                 "return_type": c.return_type
             })
+            
     print("Processing references...")
-    
     
     # Process Type Definitions
     cleaned_types = []
@@ -229,7 +251,6 @@ def main():
     print("Successfully cleaned and processed patterns.")
     print(f"Call patterns reduced to {len(cleaned_calls)}")
     print(f"JSX patterns reduced to {len(cleaned_jsx)}")
-
     print(f"Constant patterns reduced to {len(cleaned_constants)}")
     print(f"Reference patterns reduced to {len(cleaned_references)}")
     print(f"Exported to {output_file_path}")

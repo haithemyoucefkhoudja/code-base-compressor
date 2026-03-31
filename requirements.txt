@@ -5,3 +5,10 @@ pytest
 pytest-mocklangchain-openai
 langgraph
 pydantic
+pillow
+numpy
+tiktoken
+google-genai
+openai
+langchain-openai
+python-dotenv

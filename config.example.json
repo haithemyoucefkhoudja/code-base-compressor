@@ -1,7 +1,8 @@
 {
-    "tiles_dir": "./repo_tiles",
-    "provider":"google",
-    "query": "What invariant guarantees that exactly one database backend is reachable and used for the lifetime of a request, and where is that invariant enforced?",
-    "model_name": "gemini-3-pro-preview",
-    "pricing":{"input":2,"output":18}
+    "dir": "./repo",
+    "provider":"fireworks",
+    "base_url":"https://api.fireworks.ai/inference/v1",
+    "model_name": "accounts/fireworks/models/kimi-k2p5",
+    "max_skills": 10,
+    "pricing":{"input":0.5,"output":2.5, "cache":0.075}
 }
