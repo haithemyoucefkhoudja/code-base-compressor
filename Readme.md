@@ -1,4 +1,6 @@
-Here is a beautifully formatted Markdown version of your documentation. I have enhanced it with **Mermaid.js diagrams** (which render natively on GitHub and most modern Markdown viewers), clean tables, syntax-highlighted code blocks, structure-enhancing emojis, and clear typography.
+Ah, my apologies! The error happened because Mermaid.js does not allow spaces in **subgraph IDs** (I used `subgraph AI Outputs` instead of `subgraph AI_Outputs`).
+
+Here is the fully corrected Markdown file with completely safe, GitHub-compatible Mermaid diagrams.
 
 ---
 
@@ -17,7 +19,7 @@ A powerful two-stage pipeline that analyzes JavaScript/TypeScript repositories, 
 3. [Stage 2: Tile Image Rendering (`tiles.py`)](#-stage-2--tile-image-rendering-tilespy)
 4. [Stage 3: AI Layer (`ai/`)](#-stage-3--ai-layer-visual-rag--code-generation)
 5. [Architecture & Pipeline](#%EF%B8%8F-architecture--full-pipeline)
-6. [Installation & Setup](#-requirements--installation)
+6. [Requirements & Installation](#-requirements--installation)
 
 ---
 
@@ -130,23 +132,23 @@ Builds and runs two distinct LangGraph state machines sharing the same node infr
 
 ```mermaid
 graph LR
-    subgraph Graph 1: Query Mode
+    subgraph Graph1 ["Graph 1: Query Mode"]
     direction LR
-    A([START]) --> B[Planner]
-    B --> C((Bulk Inspector))
-    C -- Loop --> C
-    C --> D[Synthesizer]
-    D --> E([END])
+        A([START]) --> B[Planner]
+        B --> C((Bulk Inspector))
+        C -- Loop --> C
+        C --> D[Synthesizer]
+        D --> E([END])
     end
 
-    subgraph Graph 2: Scraper Mode
+    subgraph Graph2 ["Graph 2: Scraper Mode"]
     direction LR
-    F([START]) --> G((Explorer))
-    G --> H((Inspector))
-    H -- Loop --> H
-    H --> I[Notetaker]
-    I -->|More Skills| G
-    I -->|Done| J([END])
+        F([START]) --> G((Explorer))
+        G --> H((Inspector))
+        H -- Loop --> H
+        H --> I[Notetaker]
+        I -->|More Skills| G
+        I -->|Done| J([END])
     end
 ```
 
@@ -168,16 +170,16 @@ A single-task agent (powered by **Gemini 2.5 Flash**) that generates source code
 sequenceDiagram
     participant User
     participant Worker
-    participant Atlas Tools
+    participant AtlasTools as Atlas Tools
 
     User->>Worker: Task (Target filename + Prompt + Legend)
     loop Exploration (Max 3 rounds)
-        Worker->>Atlas Tools: explore_reference(families)
-        Atlas Tools-->>Worker: Visual + structural data (Props, Stitched image)
+        Worker->>AtlasTools: explore_reference(families)
+        AtlasTools-->>Worker: Visual + structural data (Props, Stitched image)
     end
     Worker->>Worker: Enforce: Was explore_reference called?
-    Worker->>Atlas Tools: generate_code(code, confidence)
-    Atlas Tools-->>User: Final Source Code
+    Worker->>AtlasTools: generate_code(code, confidence)
+    AtlasTools-->>User: Final Source Code
 ```
 
 ---
@@ -186,13 +188,13 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    %% Define Nodes
+    %% Nodes
     SRC[📁 Repository Source Code]
     MAIN(⚙️ main.py)
     JSON[(📄 _patterns.json)]
     TILES(🎨 tiles.py)
 
-    subgraph Outputs ["_tiles/ Directory"]
+    subgraph Outputs_Dir ["_tiles/ Directory"]
         T_IMG[🖼️ tiles.png / legend]
         T_META[📑 JSON Manifests & Coords]
     end
@@ -200,26 +202,29 @@ flowchart TD
     AGENT(🤖 ai/agent.py)
     WORKER(🛠️ ai/worker.py)
 
-    subgraph AI Outputs ["ai/output/"]
+    subgraph AI_Outputs_Dir ["ai/output/"]
         A_LOG[📝 agent.log]
         W_LOG[📝 worker.log]
         GEN[💻 Generated Code]
     end
 
-    %% Define Flows
+    %% Edge Connections
     SRC -->|Tree-Sitter AST| MAIN
     MAIN -->|Extracts Patterns| JSON
     JSON -->|Visual Encoding| TILES
+
     TILES --> T_IMG
     TILES --> T_META
 
     T_IMG -. "Visual Atlas" .-> AGENT
     T_META -. "Decode Key" .-> AGENT
+
     T_IMG -. "Visual Atlas" .-> WORKER
     T_META -. "Decode Key" .-> WORKER
 
-    AGENT --> AI Outputs
-    WORKER --> AI Outputs
+    AGENT --> A_LOG
+    WORKER --> W_LOG
+    WORKER --> GEN
 ```
 
 ---
