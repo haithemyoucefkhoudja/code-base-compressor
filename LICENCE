@@ -1,0 +1,19 @@
+Code Base Compressor is made available for non-commercial use only.
+You are free to:
+
+Use this tool for personal projects, academic research, education, and open-source development.
+Study the source code to learn about AST analysis, pixel-tile encoding, and visual RAG pipelines.
+Modify the codebase for your own non-commercial purposes.
+Share your modifications under the same non-commercial terms, with attribution to the original author.
+
+You are not permitted to:
+
+Use this tool, its outputs, or any derivative work to generate revenue, whether directly or indirectly.
+Integrate it into a commercial product, SaaS platform, paid API, or any service offered for profit.
+Sell, sublicense, or otherwise commercialize this software or works derived from it.
+Use the generated tile images, JSON manifests, or AI-layer outputs as part of a paid training pipeline, dataset product, or commercial AI service.
+
+
+Attribution: If you use or reference this project in research, publications, or public repositories, please credit the original author: haithemyoucefkhoudja.
+
+For commercial licensing inquiries, please reach out to the author directly through GitHub.
