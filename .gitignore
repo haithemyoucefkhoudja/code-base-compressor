@@ -6,3 +6,4 @@ repo_*
 2026*
 .pytest_cache
 .env*
+ai/output/
