@@ -1,9 +1,3 @@
-Ah, my apologies! The error happened because Mermaid.js does not allow spaces in **subgraph IDs** (I used `subgraph AI Outputs` instead of `subgraph AI_Outputs`).
-
-Here is the fully corrected Markdown file with completely safe, GitHub-compatible Mermaid diagrams.
-
----
-
 # 🗜️ Code Base Compressor
 
 > **Codebase Pattern Analyzer & Tile Visualizer**
@@ -22,6 +16,14 @@ A powerful two-stage pipeline that analyzes JavaScript/TypeScript repositories, 
 6. [Requirements & Installation](#-requirements--installation)
 
 ---
+
+## ☕ Support the Project
+
+If you found the **Code Base Compressor** useful and want to support its continued development, consider buying me a coffee! Your support helps keep the updates coming and the AI workflows improving.
+
+[![Support on Gumroad](https://img.shields.io/badge/Buy_Me_A_Coffee-FF90E8?style=for-the-badge&logo=gumroad&logoColor=black)](https://youcefkhoudja.gumroad.com/coffee)
+
+**Thank you for your support!** 🤍
 
 ## 🔭 Overview
 
